@@ -159,6 +159,9 @@ class PDFProcessor:
                                 page, table, page_num + 1
                             )
                             
+                            # Replace NaN values with empty strings for JSON compatibility
+                            df = df.fillna('')
+                            
                             table_data = {
                                 'data': df.to_dict('records'),
                                 'columns': list(df.columns),
@@ -200,6 +203,9 @@ class PDFProcessor:
                             df = df.dropna(how='all').dropna(axis=1, how='all')
                             
                             if isinstance(df, pd.DataFrame) and not df.empty and len(df) > 1:
+                                # Replace NaN values with empty strings for JSON compatibility
+                                df = df.fillna('')
+                                
                                 table_data = {
                                     'data': df.to_dict('records'),
                                     'columns': list(df.columns),
@@ -242,6 +248,9 @@ class PDFProcessor:
                     df = df.dropna(how='all').dropna(axis=1, how='all')
                     
                     if not df.empty:
+                        # Replace NaN values with empty strings for JSON compatibility
+                        df = df.fillna('')
+                        
                         table_data = {
                             'data': df.to_dict('records'),
                             'columns': list(df.columns),
