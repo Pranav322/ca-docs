@@ -38,7 +38,7 @@ class RAGPipeline:
             
             # Step 1: Generate query embedding
             query_embedding = self.embedding_manager.get_query_embedding_with_filters(
-                question, level, paper
+                question, level or '', paper or ''
             )
             
             # Step 2: Retrieve relevant documents

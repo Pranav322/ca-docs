@@ -326,7 +326,8 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
         
         # Cleanup on error
         try:
-            FileUtils.cleanup_temp_file(tmp_file_path)
+            if 'tmp_file_path' in locals():
+                FileUtils.cleanup_temp_file(tmp_file_path)
         except:
             pass
 

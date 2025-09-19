@@ -132,7 +132,7 @@ class VectorDatabase:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id;
             """, (file_id, file_name, content, embedding, json.dumps(metadata), 
-                  chunk_index, level, paper, module, chapter, unit))
+                  chunk_index, level or '', paper or '', module or '', chapter or '', unit or ''))
             
             doc_id = cur.fetchone()[0]
             conn.commit()
@@ -163,7 +163,7 @@ class VectorDatabase:
                 RETURNING id;
             """, (file_id, file_name, json.dumps(table_data), table_html, embedding,
                   context_before, context_after, page_number, table_index,
-                  level, paper, module, chapter, unit))
+                  level or '', paper or '', module or '', chapter or '', unit or ''))
             
             table_id = cur.fetchone()[0]
             conn.commit()
@@ -198,7 +198,7 @@ class VectorDatabase:
                     unit = EXCLUDED.unit,
                     total_pages = EXCLUDED.total_pages
                 RETURNING id;
-            """, (file_id, file_name, appwrite_file_id, level, paper, module, chapter, unit, total_pages))
+            """, (file_id, file_name, appwrite_file_id, level, paper, module or '', chapter or '', unit or '', total_pages))
             
             metadata_id = cur.fetchone()[0]
             conn.commit()
