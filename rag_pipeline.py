@@ -25,7 +25,7 @@ class RAGPipeline:
         # RAG configuration
         self.top_k_documents = 5
         self.top_k_tables = 3
-        self.similarity_threshold = 0.7
+        self.similarity_threshold = 0.5
         
     def answer_question(self, question: str, level: str = None, paper: str = None,
                        module: str = None, chapter: str = None, unit: str = None,
