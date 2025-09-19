@@ -392,14 +392,14 @@ class PDFProcessor:
                             row = [cell['text'] for cell in sorted_cells if cell['text'].strip()]
                             if row:  # Only add non-empty rows
                                 table_rows.append(row)
-                    
-                    if len(table_rows) > 1:
-                        return [{
-                            'content': f"Table extracted from OCR:\n{pd.DataFrame(table_rows[1:], columns=table_rows[0]).to_string()}",
-                            'page_number': page_number,
-                            'extraction_method': 'OCR_table',
-                            'content_type': 'table_ocr'
-                        }]
+                        
+                        if len(table_rows) > 1:
+                            return [{
+                                'content': f"Table extracted from OCR:\n{pd.DataFrame(table_rows[1:], columns=table_rows[0]).to_string()}",
+                                'page_number': page_number,
+                                'extraction_method': 'OCR_table',
+                                'content_type': 'table_ocr'
+                            }]
             
             return []
             
@@ -456,7 +456,10 @@ class PDFProcessor:
             if 'data' in table and table['data']:
                 # Add first few cell values to signature
                 first_row = table['data'][0] if table['data'] else {}
-                signature += str(sorted(first_row.values())[:3])
+                # Filter out None values and convert all to strings for comparison
+                values = [str(v) for v in first_row.values() if v is not None]
+                if values:
+                    signature += str(sorted(values)[:3])
             
             if signature not in seen_signatures:
                 seen_signatures.add(signature)
