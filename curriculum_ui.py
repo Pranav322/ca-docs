@@ -138,6 +138,7 @@ class CurriculumSelector:
         # Check if paper has modules
         if not curriculum_manager.has_modules(level, paper):
             # Skip module selection - no modules for this paper
+            st.info("ℹ️ This paper has no modules - proceeding directly to chapters")
             st.session_state[f"{self.prefix}_module"] = None
             return None
         
@@ -237,6 +238,7 @@ class CurriculumSelector:
         # Check if chapter has units
         if not curriculum_manager.has_units(level, paper, chapter, module):
             # Skip unit selection - no units for this chapter
+            st.info("ℹ️ This chapter has no units - selection complete at chapter level")
             st.session_state[f"{self.prefix}_unit"] = None
             return None
         
@@ -278,17 +280,17 @@ class CurriculumSelector:
             st.subheader(title)
         
         if columns:
-            # Render in columns for better layout
+            # Render in columns following proper hierarchy: Level → Paper → Module → Chapter → Unit
             col1, col2 = st.columns(2)
             
             with col1:
                 level = self.render_level_selector("CA Level")
+                paper = self.render_paper_selector("Paper")
                 module = self.render_module_selector("Module")
-                unit = self.render_unit_selector("Unit")
                 
             with col2:
-                paper = self.render_paper_selector("Paper")
                 chapter = self.render_chapter_selector("Chapter")
+                unit = self.render_unit_selector("Unit")
         else:
             # Render in single column
             level = self.render_level_selector("CA Level")

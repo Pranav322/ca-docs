@@ -44,30 +44,36 @@ class CurriculumManager:
             if not line.strip():
                 continue
                 
-            # Count indentation level
-            indent_level = (len(line) - len(line.lstrip())) // 4
-            clean_line = line.strip().replace('├── ', '').replace('└── ', '').replace('│   ', '').strip()
+            # Clean the line by removing tree characters and getting the content
+            clean_line = line.strip()
+            # Remove tree drawing characters
+            clean_line = re.sub(r'^[│├└\s─]*', '', clean_line).strip()
             
             if not clean_line or clean_line == '.':
                 continue
             
-            # Level 1: CA Levels (Foundation, Intermediate, Final)
-            if indent_level == 1 and any(level in clean_line.lower() for level in ['foundation', 'intermediate', 'final']):
+            # Count tree depth by counting the tree structure
+            # Pattern is: │ + two non-breaking spaces + one regular space
+            tree_pattern = '│\xa0\xa0 '  # │ + two non-breaking spaces (Unicode 160) + one regular space
+            tree_depth = line.count(tree_pattern) + (1 if ('├──' in line or '└──' in line) else 0)
+            
+            # Level 0: CA Levels (Foundation, Intermediate, Final)
+            if tree_depth == 1 and any(level in clean_line.lower() for level in ['foundation', 'intermediate', 'final']):
                 current_level = self._normalize_level_name(clean_line)
                 curriculum[current_level] = {}
                 current_paper = None
                 current_module = None
                 current_chapter = None
                 
-            # Level 2: Papers
-            elif indent_level == 2 and current_level and 'paper' in clean_line.lower():
+            # Level 1: Papers
+            elif tree_depth == 2 and current_level and 'paper' in clean_line.lower():
                 current_paper = self._clean_paper_name(clean_line)
                 curriculum[current_level][current_paper] = {}
                 current_module = None
                 current_chapter = None
                 
-            # Level 3: Modules or Chapters
-            elif indent_level == 3 and current_level and current_paper:
+            # Level 2: Modules or Chapters
+            elif tree_depth == 3 and current_level and current_paper:
                 if 'module' in clean_line.lower() or 'part' in clean_line.lower():
                     # This is a module
                     current_module = self._clean_module_name(clean_line)
@@ -80,8 +86,8 @@ class CurriculumManager:
                         curriculum[current_level][current_paper]['chapters'] = {}
                     curriculum[current_level][current_paper]['chapters'][current_chapter] = {}
                     
-            # Level 4: Chapters (under modules) or Units
-            elif indent_level == 4 and current_level and current_paper:
+            # Level 3: Chapters (under modules) or Units
+            elif tree_depth == 4 and current_level and current_paper:
                 if current_module and 'chapter' in clean_line.lower():
                     # Chapter under module
                     current_chapter = self._clean_chapter_name(clean_line)
@@ -93,8 +99,8 @@ class CurriculumManager:
                         curriculum[current_level][current_paper]['chapters'][current_chapter]['units'] = {}
                     curriculum[current_level][current_paper]['chapters'][current_chapter]['units'][unit_name] = {}
                     
-            # Level 5: Units (under module chapters)
-            elif indent_level == 5 and current_level and current_paper and current_module and current_chapter:
+            # Level 4: Units (under module chapters)
+            elif tree_depth == 5 and current_level and current_paper and current_module and current_chapter:
                 if 'unit' in clean_line.lower():
                     unit_name = self._clean_unit_name(clean_line)
                     if 'units' not in curriculum[current_level][current_paper][current_module][current_chapter]:
