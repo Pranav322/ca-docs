@@ -2,6 +2,10 @@
 
 This is a CA (Chartered Accountancy) RAG (Retrieval-Augmented Generation) Assistant built with Streamlit. The application allows users to upload CA study materials in PDF format, processes them to extract text and tables, stores the content in a vector database, and provides an intelligent Q&A interface. The system is specifically designed for CA course materials across Foundation, Intermediate, and Final levels, with structured paper and module organization.
 
+# Recent Changes
+
+**September 19, 2025**: Updated curriculum parsing system to use clean JSON structure instead of tree parsing for improved consistency and reliability. All hierarchical navigation now works with standardized naming from JSON file format.
+
 # User Preferences
 
 Preferred communication style: Simple, everyday language.
