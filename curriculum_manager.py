@@ -173,7 +173,7 @@ class CurriculumManager:
     
     def get_modules(self, level: str, paper: str) -> List[str]:
         """Get modules for a specific level and paper"""
-        if level not in self.curriculum_data or paper not in self.curriculum_data[level]:
+        if not level or not paper or level not in self.curriculum_data or paper not in self.curriculum_data[level]:
             return []
         
         paper_data = self.curriculum_data[level][paper]
@@ -188,12 +188,14 @@ class CurriculumManager:
     
     def has_modules(self, level: str, paper: str) -> bool:
         """Check if a paper has modules"""
+        if not level or not paper:
+            return False
         modules = self.get_modules(level, paper)
         return len(modules) > 0
     
-    def get_chapters(self, level: str, paper: str, module: str = None) -> List[str]:
+    def get_chapters(self, level: str, paper: str, module: Optional[str] = None) -> List[str]:
         """Get chapters for a specific level, paper, and optionally module"""
-        if level not in self.curriculum_data or paper not in self.curriculum_data[level]:
+        if not level or not paper or level not in self.curriculum_data or paper not in self.curriculum_data[level]:
             return []
         
         paper_data = self.curriculum_data[level][paper]
@@ -210,9 +212,9 @@ class CurriculumManager:
                 return list(paper_data['chapters'].keys())
             return []
     
-    def get_units(self, level: str, paper: str, chapter: str, module: str = None) -> List[str]:
+    def get_units(self, level: str, paper: str, chapter: str, module: Optional[str] = None) -> List[str]:
         """Get units for a specific level, paper, chapter, and optionally module"""
-        if level not in self.curriculum_data or paper not in self.curriculum_data[level]:
+        if not level or not paper or not chapter or level not in self.curriculum_data or paper not in self.curriculum_data[level]:
             return []
         
         paper_data = self.curriculum_data[level][paper]
@@ -234,13 +236,15 @@ class CurriculumManager:
         
         return []
     
-    def has_units(self, level: str, paper: str, chapter: str, module: str = None) -> bool:
+    def has_units(self, level: str, paper: str, chapter: str, module: Optional[str] = None) -> bool:
         """Check if a chapter has units"""
+        if not level or not paper or not chapter:
+            return False
         units = self.get_units(level, paper, chapter, module)
         return len(units) > 0
     
-    def get_hierarchy_info(self, level: str, paper: str = None, module: str = None, 
-                          chapter: str = None, unit: str = None) -> Dict[str, Any]:
+    def get_hierarchy_info(self, level: str, paper: Optional[str] = None, module: Optional[str] = None, 
+                          chapter: Optional[str] = None, unit: Optional[str] = None) -> Dict[str, Any]:
         """Get comprehensive hierarchy information for a given path"""
         info = {
             'level': level,
@@ -275,8 +279,8 @@ class CurriculumManager:
             
         return info
     
-    def validate_hierarchy(self, level: str, paper: str = None, module: str = None,
-                          chapter: str = None, unit: str = None) -> bool:
+    def validate_hierarchy(self, level: str, paper: Optional[str] = None, module: Optional[str] = None,
+                          chapter: Optional[str] = None, unit: Optional[str] = None) -> bool:
         """Validate if the given hierarchy path is valid"""
         try:
             if level not in self.curriculum_data:
@@ -305,8 +309,8 @@ class CurriculumManager:
             logger.error(f"Hierarchy validation error: {e}")
             return False
     
-    def get_display_path(self, level: str, paper: str = None, module: str = None,
-                        chapter: str = None, unit: str = None) -> str:
+    def get_display_path(self, level: str, paper: Optional[str] = None, module: Optional[str] = None,
+                        chapter: Optional[str] = None, unit: Optional[str] = None) -> str:
         """Generate a human-readable display path"""
         path_parts = [level]
         
