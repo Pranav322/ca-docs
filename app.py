@@ -15,6 +15,8 @@ from rag_pipeline import RAGPipeline
 from appwrite_client import AppwriteClient
 from utils import FileUtils, ValidationUtils, ProgressTracker, ResponseFormatter
 from config import CA_LEVELS, CA_PAPERS
+from curriculum_ui import CurriculumSelector, render_curriculum_filter
+from curriculum_manager import curriculum_manager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -59,32 +61,13 @@ def render_sidebar():
     
     st.sidebar.markdown("---")
     
-    # Global filters (for question answering)
+    # Global filters (for question answering) - Now using curriculum selector
     if page == "📚 Ask Questions":
         st.sidebar.subheader("🎯 Filter by Syllabus")
         
-        level = st.sidebar.selectbox(
-            "CA Level:",
-            ["All Levels"] + CA_LEVELS,
-            key="filter_level"
-        )
-        
-        if level != "All Levels":
-            papers = ["All Papers"] + CA_PAPERS.get(level, [])
-            paper = st.sidebar.selectbox(
-                "Paper:",
-                papers,
-                key="filter_paper"
-            )
-        else:
-            paper = "All Papers"
-            st.session_state.filter_paper = paper
-        
-        # Advanced filters
-        with st.sidebar.expander("🔍 Advanced Filters"):
-            module = st.text_input("Module (optional):", key="filter_module")
-            chapter = st.text_input("Chapter (optional):", key="filter_chapter")
-            unit = st.text_input("Unit (optional):", key="filter_unit")
+        # Use the new curriculum filter component
+        with st.sidebar:
+            filters = render_curriculum_filter(prefix="sidebar_filter", title="", show_clear=True)
             
             include_tables = st.checkbox("Include Tables", value=True, key="include_tables")
     
@@ -106,27 +89,25 @@ def render_file_upload():
         # Display file info
         st.success(f"File selected: {uploaded_file.name} ({uploaded_file.size} bytes)")
         
-        # Metadata tagging form
+        # Smart Curriculum-based Metadata Tagging
+        st.subheader("🏷️ Smart Curriculum Tagging")
+        st.markdown("Select the curriculum hierarchy to automatically tag your document")
+        
+        # Initialize curriculum selector for upload
+        upload_selector = CurriculumSelector(prefix="upload")
+        
+        # Render the curriculum selector
+        selection = upload_selector.render_complete_selector(
+            title="📖 Select Document Location in Curriculum",
+            show_path=True,
+            columns=True
+        )
+        
+        # Show selection status
+        upload_selector.render_selection_status()
+        
+        # Additional metadata form
         with st.form("metadata_form"):
-            st.subheader("🏷️ Manual Metadata Tagging")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                level = st.selectbox("CA Level *", CA_LEVELS, key="upload_level")
-                
-                if level:
-                    papers = CA_PAPERS.get(level, [])
-                    paper = st.selectbox("Paper *", papers, key="upload_paper")
-                else:
-                    paper = ""
-            
-            with col2:
-                module = st.text_input("Module (optional)", key="upload_module")
-                chapter = st.text_input("Chapter (optional)", key="upload_chapter")
-            
-            unit = st.text_input("Unit (optional)", key="upload_unit")
-            
             # Additional metadata
             with st.expander("📋 Additional Information"):
                 description = st.text_area("Description (optional)", key="upload_description")
@@ -135,15 +116,19 @@ def render_file_upload():
             submitted = st.form_submit_button("🚀 Upload and Process")
             
             if submitted:
-                if not level or not paper:
-                    st.error("Please fill in all required fields (Level and Paper)")
+                if not upload_selector.is_complete_selection():
+                    missing = upload_selector.get_missing_selections()
+                    st.error(f"Please complete the curriculum selection: {', '.join(missing)}")
                 else:
+                    # Get the final selection from the curriculum selector
+                    final_selection = upload_selector.get_current_selection()
+                    
                     process_uploaded_file(uploaded_file, {
-                        'level': level,
-                        'paper': paper,
-                        'module': module or None,
-                        'chapter': chapter or None,
-                        'unit': unit or None,
+                        'level': final_selection['level'],
+                        'paper': final_selection['paper'],
+                        'module': final_selection['module'],
+                        'chapter': final_selection['chapter'],
+                        'unit': final_selection['unit'],
                         'description': description or None,
                         'tags': [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
                     })
