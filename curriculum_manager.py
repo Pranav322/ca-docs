@@ -4,6 +4,8 @@ Parses and manages the CA curriculum structure for cascading dropdowns
 """
 
 import re
+import json
+import os
 from typing import Dict, List, Optional, Any
 import logging
 
@@ -13,17 +15,36 @@ logger = logging.getLogger(__name__)
 class CurriculumManager:
     def __init__(self):
         self.curriculum_data = {}
+        # Configuration for curriculum source
+        self.curriculum_source = os.getenv('CURRICULUM_SOURCE', 'json')  # 'json' or 'tree'
+        self.json_curriculum_path = os.getenv('CURRICULUM_JSON_PATH', 'attached_assets/New document 1_1758323551064.json')
+        self.tree_curriculum_path = 'attached_assets/output_1758321057482.txt'
         self._load_curriculum_structure()
     
     def _load_curriculum_structure(self):
-        """Load and parse the curriculum structure from text file"""
+        """Load and parse the curriculum structure from JSON or text file"""
         try:
-            # Read the curriculum file
-            with open('attached_assets/output_1758321057482.txt', 'r', encoding='utf-8') as f:
+            # Try JSON first if available
+            if self.curriculum_source == 'json' and os.path.exists(self.json_curriculum_path):
+                logger.info(f"Loading curriculum from JSON: {self.json_curriculum_path}")
+                with open(self.json_curriculum_path, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
+                self.curriculum_data = self._parse_curriculum_json(json_data)
+                
+                # Check if JSON parsing was successful
+                if self.curriculum_data and len(self.curriculum_data) > 0:
+                    logger.info(f"Successfully loaded JSON curriculum with {len(self.curriculum_data)} levels")
+                    return
+                else:
+                    logger.warning("JSON curriculum data is empty or malformed, falling back to tree parsing")
+            
+            # Fallback to tree parsing
+            logger.info(f"Loading curriculum from tree structure: {self.tree_curriculum_path}")
+            with open(self.tree_curriculum_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
             self.curriculum_data = self._parse_curriculum_tree(content)
-            logger.info(f"Loaded curriculum with {len(self.curriculum_data)} levels")
+            logger.info(f"Loaded tree curriculum with {len(self.curriculum_data)} levels")
             
         except Exception as e:
             logger.error(f"Failed to load curriculum: {e}")
@@ -108,6 +129,70 @@ class CurriculumManager:
                     curriculum[current_level][current_paper][current_module][current_chapter]['units'][unit_name] = {}
         
         return curriculum
+    
+    def _parse_curriculum_json(self, json_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse the curriculum structure from JSON data"""
+        curriculum = {}
+        
+        try:
+            if 'CA_Course_Structure' not in json_data:
+                logger.error("JSON data missing 'CA_Course_Structure' key")
+                return curriculum
+            
+            ca_structure = json_data['CA_Course_Structure']
+            
+            for level_name, level_data in ca_structure.items():
+                # Normalize level name
+                normalized_level = self._normalize_level_name(level_name)
+                curriculum[normalized_level] = {}
+                
+                for paper_name, paper_data in level_data.items():
+                    # Clean paper name
+                    clean_paper = self._clean_paper_name(paper_name)
+                    curriculum[normalized_level][clean_paper] = {}
+                    
+                    # Check if paper has modules or direct chapters
+                    has_modules = any('module' in key.lower() for key in paper_data.keys())
+                    
+                    if has_modules:
+                        # Paper has modules
+                        for module_name, module_data in paper_data.items():
+                            if 'module' in module_name.lower():
+                                clean_module = self._clean_module_name(module_name)
+                                curriculum[normalized_level][clean_paper][clean_module] = {}
+                                
+                                # Add chapters under module
+                                if isinstance(module_data, dict):
+                                    for chapter_name, chapter_data in module_data.items():
+                                        clean_chapter = self._clean_chapter_name(chapter_name)
+                                        curriculum[normalized_level][clean_paper][clean_module][clean_chapter] = {}
+                                        
+                                        # Check for units in chapter
+                                        if isinstance(chapter_data, dict) and chapter_data:
+                                            curriculum[normalized_level][clean_paper][clean_module][clean_chapter]['units'] = {}
+                                            for unit_name in chapter_data.keys():
+                                                clean_unit = self._clean_unit_name(unit_name)
+                                                curriculum[normalized_level][clean_paper][clean_module][clean_chapter]['units'][clean_unit] = {}
+                    else:
+                        # Paper has direct chapters (no modules)
+                        curriculum[normalized_level][clean_paper]['chapters'] = {}
+                        
+                        for chapter_name, chapter_data in paper_data.items():
+                            clean_chapter = self._clean_chapter_name(chapter_name)
+                            curriculum[normalized_level][clean_paper]['chapters'][clean_chapter] = {}
+                            
+                            # Check for units in chapter
+                            if isinstance(chapter_data, dict) and chapter_data:
+                                curriculum[normalized_level][clean_paper]['chapters'][clean_chapter]['units'] = {}
+                                for unit_name in chapter_data.keys():
+                                    clean_unit = self._clean_unit_name(unit_name)
+                                    curriculum[normalized_level][clean_paper]['chapters'][clean_chapter]['units'][clean_unit] = {}
+            
+            return curriculum
+            
+        except Exception as e:
+            logger.error(f"Error parsing JSON curriculum: {e}")
+            return {}
     
     def _normalize_level_name(self, level: str) -> str:
         """Normalize level names to consistent format"""
@@ -276,10 +361,10 @@ class CurriculumManager:
             if not info['has_modules']:
                 info['available_chapters'] = self.get_chapters(level, paper)
                 
-        if module:
+        if module and paper:
             info['available_chapters'] = self.get_chapters(level, paper, module)
             
-        if chapter:
+        if chapter and paper:
             info['has_units'] = self.has_units(level, paper, chapter, module)
             info['available_units'] = self.get_units(level, paper, chapter, module)
             
@@ -295,16 +380,16 @@ class CurriculumManager:
             if paper and paper not in self.curriculum_data[level]:
                 return False
                 
-            if module:
+            if module and paper:
                 if not self.has_modules(level, paper) or module not in self.get_modules(level, paper):
                     return False
                     
-            if chapter:
+            if chapter and paper:
                 valid_chapters = self.get_chapters(level, paper, module)
                 if chapter not in valid_chapters:
                     return False
                     
-            if unit:
+            if unit and paper and chapter:
                 valid_units = self.get_units(level, paper, chapter, module)
                 if unit not in valid_units:
                     return False
