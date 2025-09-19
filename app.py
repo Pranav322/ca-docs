@@ -349,20 +349,13 @@ def render_question_interface():
             st.error("Please enter a valid question (5-1000 characters).")
             return
         
-        # Get filters from sidebar
-        level = st.session_state.get('filter_level', 'All Levels')
-        paper = st.session_state.get('filter_paper', 'All Papers')
-        module = st.session_state.get('filter_module', '')
-        chapter = st.session_state.get('filter_chapter', '')
-        unit = st.session_state.get('filter_unit', '')
+        # Get filters from the new curriculum selector in sidebar
+        level_filter = st.session_state.get('sidebar_filter_level')
+        paper_filter = st.session_state.get('sidebar_filter_paper')
+        module_filter = st.session_state.get('sidebar_filter_module')
+        chapter_filter = st.session_state.get('sidebar_filter_chapter')
+        unit_filter = st.session_state.get('sidebar_filter_unit')
         include_tables = st.session_state.get('include_tables', True)
-        
-        # Process filters
-        level_filter = level if level != "All Levels" else None
-        paper_filter = paper if paper != "All Papers" else None
-        module_filter = module if module.strip() else None
-        chapter_filter = chapter if chapter.strip() else None
-        unit_filter = unit if unit.strip() else None
         
         # Show processing
         with st.spinner("🔍 Searching knowledge base and generating answer..."):
@@ -406,22 +399,27 @@ def render_question_interface():
             with st.expander(f"Q: {chat['question'][:100]}{'...' if len(chat['question']) > 100 else ''}", expanded=(i==0)):
                 render_answer_display(chat['answer_data'], chat['question'])
                 
-                # Show applied filters
+                # Show applied filters with curriculum hierarchy
                 if any(chat['filters'].values()):
-                    st.markdown("**Applied Filters:**")
-                    filter_text = []
+                    st.markdown("**🎯 Applied Filters:**")
+                    # Create display path from hierarchy
+                    path_parts = []
                     if chat['filters']['level']:
-                        filter_text.append(f"Level: {chat['filters']['level']}")
+                        path_parts.append(chat['filters']['level'])
                     if chat['filters']['paper']:
-                        filter_text.append(f"Paper: {chat['filters']['paper']}")
+                        path_parts.append(chat['filters']['paper'])
                     if chat['filters']['module']:
-                        filter_text.append(f"Module: {chat['filters']['module']}")
+                        path_parts.append(chat['filters']['module'])
                     if chat['filters']['chapter']:
-                        filter_text.append(f"Chapter: {chat['filters']['chapter']}")
+                        path_parts.append(chat['filters']['chapter'])
                     if chat['filters']['unit']:
-                        filter_text.append(f"Unit: {chat['filters']['unit']}")
+                        path_parts.append(chat['filters']['unit'])
                     
-                    st.caption(" | ".join(filter_text))
+                    if path_parts:
+                        filter_path = " → ".join(path_parts)
+                        st.caption(f"📍 {filter_path}")
+                else:
+                    st.caption("🌐 No filters applied - searched across all content")
     else:
         st.info("👋 Ask your first question to get started! Use the filters in the sidebar to narrow down your search.")
 
