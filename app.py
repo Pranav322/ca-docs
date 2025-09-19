@@ -495,8 +495,8 @@ def render_answer_display(answer_data: Dict[str, Any], question: str):
     # Suggestions
     if answer_data.get('suggestions'):
         st.markdown("**💡 Related Questions:**")
-        for suggestion in answer_data['suggestions']:
-            if st.button(suggestion, key=f"suggest_{hash(suggestion)}_{hash(question)}"):
+        for i, suggestion in enumerate(answer_data['suggestions']):
+            if st.button(suggestion, key=f"suggest_{i}_{hash(suggestion)}_{hash(question)}"):
                 st.session_state.suggested_question = suggestion
                 st.rerun()
 
