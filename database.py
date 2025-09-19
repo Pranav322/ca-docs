@@ -23,7 +23,13 @@ class VectorDatabase:
     def get_connection(self):
         """Get database connection"""
         try:
-            conn = psycopg2.connect(**self.connection_params)
+            conn = psycopg2.connect(
+                host=self.connection_params['host'],
+                port=self.connection_params['port'],
+                database=self.connection_params['database'],
+                user=self.connection_params['user'],
+                password=self.connection_params['password']
+            )
             return conn
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
@@ -252,7 +258,7 @@ class VectorDatabase:
             """
             
             cur.execute(query, params)
-            results = cur.fetchall()
+            results = cur.fetchall() or []
             
             cur.close()
             conn.close()
@@ -304,7 +310,7 @@ class VectorDatabase:
             """
             
             cur.execute(query, params)
-            results = cur.fetchall()
+            results = cur.fetchall() or []
             
             cur.close()
             conn.close()

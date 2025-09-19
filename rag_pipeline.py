@@ -76,10 +76,29 @@ class RAGPipeline:
                 if table['similarity'] >= self.similarity_threshold
             ]
             
-            # Step 5: Prepare context for LLM
+            # Step 5: Handle empty results gracefully
+            if not filtered_documents and not filtered_tables:
+                return {
+                    'answer': f"I don't have any relevant information about '{question}' in my knowledge base yet. Please upload some CA study materials first, or try a more general question about accounting principles.",
+                    'confidence': 0.0,
+                    'sources': {'documents': [], 'tables': []},
+                    'metadata': {
+                        'level': level,
+                        'paper': paper,
+                        'module': module,
+                        'chapter': chapter,
+                        'unit': unit,
+                        'documents_found': 0,
+                        'tables_found': 0,
+                        'processing_time': 0
+                    },
+                    'suggestions': self._generate_suggestions(question, level, paper)
+                }
+            
+            # Step 6: Prepare context for LLM
             context = self._prepare_context(filtered_documents, filtered_tables)
             
-            # Step 6: Generate answer using LLM
+            # Step 7: Generate answer using LLM
             answer_data = self._generate_answer(question, context, level, paper)
             
             # Step 7: Prepare response with citations

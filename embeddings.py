@@ -32,7 +32,7 @@ class AzureEmbeddings:
                 model=self.deployment_name
             )
             
-            embedding = response['data'][0]['embedding']
+            embedding = response.data[0].embedding
             return embedding
             
         except Exception as e:
@@ -58,7 +58,7 @@ class AzureEmbeddings:
                 )
                 
                 # Extract embeddings
-                batch_embeddings = [item['embedding'] for item in response['data']]
+                batch_embeddings = [item.embedding for item in response.data]
                 all_embeddings.extend(batch_embeddings)
                 
                 # Add small delay to respect rate limits

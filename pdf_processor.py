@@ -1,11 +1,5 @@
 import fitz  # PyMuPDF
 import pdfplumber
-import camelot
-import tabula
-import pytesseract
-import cv2
-import numpy as np
-from PIL import Image
 import pandas as pd
 from typing import List, Dict, Tuple, Any
 import logging
@@ -13,9 +7,27 @@ import io
 import base64
 import tempfile
 import os
+import pytesseract
+import cv2
+import numpy as np
+from PIL import Image
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+try:
+    import camelot.io as camelot
+    CAMELOT_AVAILABLE = True
+except ImportError:
+    CAMELOT_AVAILABLE = False
+    logger.warning("Camelot not available - table extraction will use pdfplumber and tabula only")
+    
+try:
+    import tabula as tabula_py
+    TABULA_AVAILABLE = True
+except ImportError:
+    TABULA_AVAILABLE = False
+    logger.warning("Tabula not available - table extraction will use pdfplumber only")
 
 class PDFProcessor:
     def __init__(self):
@@ -52,19 +64,21 @@ class PDFProcessor:
                 results['metadata']['has_tables'] = True
                 results['metadata']['processing_methods'].append('pdfplumber')
             
-            # Process with camelot for robust table extraction
-            camelot_results = self._process_with_camelot(pdf_path)
-            results['tables'].extend(camelot_results['tables'])
-            if camelot_results['tables']:
-                results['metadata']['has_tables'] = True
-                results['metadata']['processing_methods'].append('camelot')
+            # Process with camelot for robust table extraction (if available)
+            if CAMELOT_AVAILABLE:
+                camelot_results = self._process_with_camelot(pdf_path)
+                results['tables'].extend(camelot_results['tables'])
+                if camelot_results['tables']:
+                    results['metadata']['has_tables'] = True
+                    results['metadata']['processing_methods'].append('camelot')
             
-            # Process with tabula for additional table extraction
-            tabula_results = self._process_with_tabula(pdf_path)
-            results['tables'].extend(tabula_results['tables'])
-            if tabula_results['tables']:
-                results['metadata']['has_tables'] = True
-                results['metadata']['processing_methods'].append('tabula')
+            # Process with tabula for additional table extraction (if available)
+            if TABULA_AVAILABLE:
+                tabula_results = self._process_with_tabula(pdf_path)
+                results['tables'].extend(tabula_results['tables'])
+                if tabula_results['tables']:
+                    results['metadata']['has_tables'] = True
+                    results['metadata']['processing_methods'].append('tabula')
             
             # Process scanned pages with OCR if needed
             ocr_results = self._process_with_ocr(pdf_path)
@@ -110,11 +124,12 @@ class PDFProcessor:
                 if image_list:
                     has_images = True
             
+            total_pages = len(doc)
             doc.close()
             
             return {
                 'text_chunks': text_chunks,
-                'total_pages': len(doc),
+                'total_pages': total_pages,
                 'has_images': has_images
             }
             
@@ -135,7 +150,9 @@ class PDFProcessor:
                     for table_idx, table in enumerate(page_tables):
                         if table and len(table) > 1:  # Ensure table has content
                             # Convert to DataFrame
-                            df = pd.DataFrame(table[1:], columns=table[0])
+                            # Clean column names and data
+                            columns = [str(col) if col is not None else f'col_{i}' for i, col in enumerate(table[0])]
+                            df = pd.DataFrame(table[1:], columns=columns)
                             
                             # Get context around table
                             context_before, context_after = self._get_table_context(
@@ -165,6 +182,8 @@ class PDFProcessor:
     
     def _process_with_camelot(self, pdf_path: str) -> Dict[str, Any]:
         """Extract tables using camelot"""
+        if not CAMELOT_AVAILABLE:
+            return {'tables': []}
         try:
             tables = []
             
@@ -180,7 +199,7 @@ class PDFProcessor:
                             # Clean the dataframe
                             df = df.dropna(how='all').dropna(axis=1, how='all')
                             
-                            if not df.empty and len(df) > 1:
+                            if isinstance(df, pd.DataFrame) and not df.empty and len(df) > 1:
                                 table_data = {
                                     'data': df.to_dict('records'),
                                     'columns': list(df.columns),
@@ -209,14 +228,16 @@ class PDFProcessor:
     
     def _process_with_tabula(self, pdf_path: str) -> Dict[str, Any]:
         """Extract tables using tabula"""
+        if not TABULA_AVAILABLE:
+            return {'tables': []}
         try:
             tables = []
             
             # Read all tables from PDF
-            tabula_tables = tabula.read_pdf(pdf_path, pages='all', multiple_tables=True)
+            tabula_tables = tabula_py.read_pdf(pdf_path, pages='all', multiple_tables=True)
             
             for table_idx, df in enumerate(tabula_tables):
-                if not df.empty and len(df) > 1:
+                if isinstance(df, pd.DataFrame) and not df.empty and len(df) > 1:
                     # Clean the dataframe
                     df = df.dropna(how='all').dropna(axis=1, how='all')
                     

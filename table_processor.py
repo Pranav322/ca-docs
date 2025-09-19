@@ -117,7 +117,7 @@ class TableProcessor:
             
             # Return the type with highest score
             if type_scores:
-                best_type = max(type_scores, key=type_scores.get)
+                best_type = max(type_scores.keys(), key=lambda k: type_scores[k])
                 if type_scores[best_type] > 0:
                     return best_type
             
@@ -134,7 +134,7 @@ class TableProcessor:
             
             # Add row-by-row content with enhanced formatting for financial tables
             for idx, row in df.iterrows():
-                row_text = f"Row {idx + 1}:"
+                row_text = f"Row {int(idx) + 1}:"
                 
                 for col_name, value in row.items():
                     if pd.notna(value) and str(value).strip():
@@ -201,12 +201,15 @@ class TableProcessor:
             
             for col in df.columns:
                 # Try to convert column to numeric
-                numeric_data = pd.to_numeric(df[col], errors='coerce')
-                non_null_count = numeric_data.count()
-                
-                if non_null_count > 0:  # Column has some numeric data
-                    total = numeric_data.sum()
-                    avg = numeric_data.mean()
+                try:
+                    numeric_data = pd.to_numeric(df[col], errors='coerce')
+                    non_null_count = numeric_data.count()
+                    
+                    if non_null_count > 0:  # Column has some numeric data
+                        total = numeric_data.sum()
+                        avg = numeric_data.mean()
+                except Exception:
+                    continue
                     
                     numerical_cols.append(f"{col}: Total={total:.2f}, Average={avg:.2f}")
             
@@ -226,7 +229,7 @@ class TableProcessor:
                 row_text = ' '.join(str(v).lower() for v in row.values if pd.notna(v))
                 
                 if any(keyword in row_text for keyword in ['total', 'subtotal', 'grand total', 'net']):
-                    key_info.append(f"Total row {idx + 1}: {dict(row)}")
+                    key_info.append(f"Total row {int(idx) + 1}: {dict(row)}")
             
             # Look for the last row (often contains totals)
             if len(df) > 1:
