@@ -267,7 +267,7 @@ class VectorDatabase:
             
         except Exception as e:
             logger.error(f"Document similarity search failed: {e}")
-            raise
+            return []
     
     def similarity_search_tables(self, query_embedding: List[float], top_k: int = 5,
                                level: str = None, paper: str = None, module: str = None,
@@ -319,7 +319,7 @@ class VectorDatabase:
             
         except Exception as e:
             logger.error(f"Table similarity search failed: {e}")
-            raise
+            return []
     
     def get_file_metadata(self, file_id: str = None) -> List[Dict]:
         """Get file metadata"""
