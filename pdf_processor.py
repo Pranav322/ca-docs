@@ -352,37 +352,46 @@ class PDFProcessor:
             lines = {}
             for i, text in enumerate(ocr_data['text']):
                 if text.strip():
-                    y_coord = ocr_data['top'][i]
-                    line_key = y_coord // 20  # Group by approximate line
+                    # Ensure coordinates are numeric
+                    try:
+                        y_coord = float(ocr_data['top'][i]) if ocr_data['top'][i] != '' else 0.0
+                        x_coord = float(ocr_data['left'][i]) if ocr_data['left'][i] != '' else 0.0
+                        confidence = float(ocr_data['conf'][i]) if ocr_data['conf'][i] != '' else 0.0
+                    except (ValueError, TypeError):
+                        continue  # Skip invalid coordinate data
+                        
+                    line_key = int(y_coord // 20)  # Group by approximate line
                     
                     if line_key not in lines:
                         lines[line_key] = []
                     
                     lines[line_key].append({
                         'text': text.strip(),
-                        'x': ocr_data['left'][i],
-                        'confidence': ocr_data['conf'][i]
+                        'x': x_coord,
+                        'confidence': confidence
                     })
             
             # If we have multiple lines with similar structure, it might be a table
             if len(lines) > 2:
-                # Sort lines by y-coordinate
-                sorted_lines = sorted(lines.items())
+                # Sort lines by y-coordinate (line_key is guaranteed to be int)
+                sorted_lines = sorted(lines.items(), key=lambda x: x[0])
                 
                 # Check if lines have similar number of elements (table-like structure)
                 line_lengths = [len(line[1]) for line in sorted_lines]
-                avg_length = sum(line_lengths) / len(line_lengths)
-                
-                # If most lines have similar length, treat as table
-                similar_length_lines = sum(1 for length in line_lengths if abs(length - avg_length) <= 2)
-                
-                if similar_length_lines / len(line_lengths) > 0.6:  # 60% of lines have similar length
-                    table_rows = []
-                    for _, line_data in sorted_lines:
-                        # Sort by x-coordinate
-                        sorted_cells = sorted(line_data, key=lambda x: x['x'])
-                        row = [cell['text'] for cell in sorted_cells]
-                        table_rows.append(row)
+                if line_lengths:  # Avoid division by zero
+                    avg_length = sum(line_lengths) / len(line_lengths)
+                    
+                    # If most lines have similar length, treat as table
+                    similar_length_lines = sum(1 for length in line_lengths if abs(length - avg_length) <= 2)
+                    
+                    if similar_length_lines / len(line_lengths) > 0.6:  # 60% of lines have similar length
+                        table_rows = []
+                        for _, line_data in sorted_lines:
+                            # Sort by x-coordinate (x is guaranteed to be float)
+                            sorted_cells = sorted(line_data, key=lambda cell: cell['x'])
+                            row = [cell['text'] for cell in sorted_cells if cell['text'].strip()]
+                            if row:  # Only add non-empty rows
+                                table_rows.append(row)
                     
                     if len(table_rows) > 1:
                         return [{
