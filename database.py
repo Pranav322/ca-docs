@@ -227,23 +227,23 @@ class VectorDatabase:
             
             # Build WHERE clause based on filters
             where_conditions = []
-            params = [query_embedding, top_k]
+            filter_params = []
             
             if level:
                 where_conditions.append("level = %s")
-                params.insert(-1, level)
+                filter_params.append(level)
             if paper:
                 where_conditions.append("paper = %s")
-                params.insert(-1, paper)
+                filter_params.append(paper)
             if module:
                 where_conditions.append("module = %s")
-                params.insert(-1, module)
+                filter_params.append(module)
             if chapter:
                 where_conditions.append("chapter = %s")
-                params.insert(-1, chapter)
+                filter_params.append(chapter)
             if unit:
                 where_conditions.append("unit = %s")
-                params.insert(-1, unit)
+                filter_params.append(unit)
             
             where_clause = " AND " + " AND ".join(where_conditions) if where_conditions else ""
             
@@ -256,6 +256,12 @@ class VectorDatabase:
                 ORDER BY embedding <=> %s
                 LIMIT %s;
             """
+            
+            # Convert embedding to string format for pgvector
+            embedding_str = '[' + ','.join(map(str, query_embedding)) + ']'
+            
+            # Build params in correct order: embedding_str, filter_params..., embedding_str, top_k
+            params = [embedding_str] + filter_params + [embedding_str, top_k]
             
             cur.execute(query, params)
             results = cur.fetchall() or []
@@ -279,23 +285,23 @@ class VectorDatabase:
             
             # Build WHERE clause based on filters
             where_conditions = []
-            params = [query_embedding, top_k]
+            filter_params = []
             
             if level:
                 where_conditions.append("level = %s")
-                params.insert(-1, level)
+                filter_params.append(level)
             if paper:
                 where_conditions.append("paper = %s")
-                params.insert(-1, paper)
+                filter_params.append(paper)
             if module:
                 where_conditions.append("module = %s")
-                params.insert(-1, module)
+                filter_params.append(module)
             if chapter:
                 where_conditions.append("chapter = %s")
-                params.insert(-1, chapter)
+                filter_params.append(chapter)
             if unit:
                 where_conditions.append("unit = %s")
-                params.insert(-1, unit)
+                filter_params.append(unit)
             
             where_clause = " AND " + " AND ".join(where_conditions) if where_conditions else ""
             
@@ -308,6 +314,12 @@ class VectorDatabase:
                 ORDER BY embedding <=> %s
                 LIMIT %s;
             """
+            
+            # Convert embedding to string format for pgvector
+            embedding_str = '[' + ','.join(map(str, query_embedding)) + ']'
+            
+            # Build params in correct order: embedding_str, filter_params..., embedding_str, top_k
+            params = [embedding_str] + filter_params + [embedding_str, top_k]
             
             cur.execute(query, params)
             results = cur.fetchall() or []
