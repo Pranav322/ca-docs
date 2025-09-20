@@ -28,6 +28,31 @@ class FileUtils:
             return f"file_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     @staticmethod
+    def sanitize_filename(filename: str) -> str:
+        """Sanitize filename by removing invalid characters"""
+        try:
+            # Remove or replace invalid characters for file paths
+            # Replace colons, slashes, and other problematic characters
+            sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
+            
+            # Remove excessive underscores and spaces
+            sanitized = re.sub(r'[_\s]+', '_', sanitized)
+            
+            # Ensure it doesn't start or end with dots or spaces
+            sanitized = sanitized.strip('. _')
+            
+            # Ensure minimum length
+            if not sanitized:
+                sanitized = f"file_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            
+            logger.info(f"Sanitized filename: '{filename}' -> '{sanitized}'")
+            return sanitized
+            
+        except Exception as e:
+            logger.error(f"Failed to sanitize filename: {e}")
+            return f"file_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    
+    @staticmethod
     def create_temp_file(content: bytes, suffix: str = ".pdf") -> str:
         """Create a temporary file with given content"""
         try:

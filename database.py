@@ -4,32 +4,20 @@ import numpy as np
 import json
 from typing import List, Dict, Any, Optional
 import logging
-from config import DATABASE_URL, PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD
+from config import DATABASE_URL
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class VectorDatabase:
     def __init__(self):
-        self.connection_params = {
-            'host': PGHOST,
-            'port': PGPORT,
-            'database': PGDATABASE,
-            'user': PGUSER,
-            'password': PGPASSWORD
-        }
+        self.connection_url = DATABASE_URL
         self.init_database()
     
     def get_connection(self):
         """Get database connection"""
         try:
-            conn = psycopg2.connect(
-                host=self.connection_params['host'],
-                port=self.connection_params['port'],
-                database=self.connection_params['database'],
-                user=self.connection_params['user'],
-                password=self.connection_params['password']
-            )
+            conn = psycopg2.connect(self.connection_url, cursor_factory=RealDictCursor)
             return conn
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
@@ -129,7 +117,7 @@ class VectorDatabase:
                            chapter: str = None, unit: str = None) -> int:
         """Store a document chunk with its embedding"""
         try:
-            conn = self.get_connection()
+            conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
             cur = conn.cursor()
             
             cur.execute("""
@@ -148,8 +136,9 @@ class VectorDatabase:
             return doc_id
             
         except Exception as e:
-            logger.error(f"Failed to store document chunk: {e}")
-            raise
+            error_msg = f"Failed to store document chunk: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg) from e
     
     def store_table(self, file_id: str, file_name: str, table_data: Dict,
                    table_html: str, embedding: List[float], context_before: str,
@@ -158,7 +147,7 @@ class VectorDatabase:
                    chapter: str = None, unit: str = None) -> int:
         """Store extracted table with its embedding"""
         try:
-            conn = self.get_connection()
+            conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
             cur = conn.cursor()
             
             cur.execute("""
@@ -179,16 +168,28 @@ class VectorDatabase:
             return table_id
             
         except Exception as e:
-            logger.error(f"Failed to store table: {e}")
-            raise
+            error_msg = f"Failed to store table: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg) from e
     
     def store_file_metadata(self, file_id: str, file_name: str, appwrite_file_id: str,
                            level: str, paper: str, module: str = None, chapter: str = None,
                            unit: str = None, total_pages: int = 0) -> int:
         """Store file metadata"""
         try:
-            conn = self.get_connection()
+            conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
             cur = conn.cursor()
+            
+            logger.info(f"=== STORE_FILE_METADATA CALLED ===")
+            logger.info(f"file_id: '{file_id}' (type: {type(file_id)})")
+            logger.info(f"file_name: '{file_name}' (type: {type(file_name)})")
+            logger.info(f"appwrite_file_id: '{appwrite_file_id}' (type: {type(appwrite_file_id)})")
+            logger.info(f"level: '{level}' (type: {type(level)})")
+            logger.info(f"paper: '{paper}' (type: {type(paper)})")
+            logger.info(f"module: '{module}' (type: {type(module)})")
+            logger.info(f"chapter: '{chapter}' (type: {type(chapter)})")
+            logger.info(f"unit: '{unit}' (type: {type(unit)})")
+            logger.info(f"total_pages: {total_pages} (type: {type(total_pages)})")
             
             cur.execute("""
                 INSERT INTO file_metadata (file_id, file_name, appwrite_file_id, level, paper,
@@ -206,7 +207,12 @@ class VectorDatabase:
                 RETURNING id;
             """, (file_id, file_name, appwrite_file_id, level, paper, module or '', chapter or '', unit or '', total_pages))
             
-            metadata_id = cur.fetchone()[0]
+            result = cur.fetchone()
+            if result is None:
+                raise Exception(f"Failed to insert/update file_metadata - no ID returned for file_id: {file_id}")
+            
+            metadata_id = result[0]
+            logger.info(f"Successfully stored file metadata with ID: {metadata_id}")
             conn.commit()
             cur.close()
             conn.close()
@@ -214,8 +220,24 @@ class VectorDatabase:
             return metadata_id
             
         except Exception as e:
-            logger.error(f"Failed to store file metadata: {e}")
-            raise
+            # Enhanced debugging
+            logger.error(f"EXCEPTION CAUGHT: {repr(e)}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception message: '{str(e)}'")
+            logger.error(f"Exception args: {e.args}")
+            
+            # Import traceback for full stack trace
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            
+            # Also log more details for psycopg2 errors
+            if hasattr(e, 'pgcode'):
+                logger.error(f"PostgreSQL error code: {e.pgcode}")
+            if hasattr(e, 'pgerror'):
+                logger.error(f"PostgreSQL error: {e.pgerror}")
+            
+            error_msg = f"Failed to store file metadata - Exception type: {type(e).__name__}, Message: '{str(e)}', Args: {e.args}"
+            raise Exception(error_msg) from e
     
     def similarity_search_documents(self, query_embedding: List[float], top_k: int = 5,
                                   level: str = None, paper: str = None, module: str = None,
@@ -351,13 +373,14 @@ class VectorDatabase:
             return [dict(row) for row in results]
             
         except Exception as e:
-            logger.error(f"Failed to get file metadata: {e}")
-            raise
+            error_msg = f"Failed to get file metadata: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg) from e
     
     def update_processing_status(self, file_id: str, status: str):
         """Update file processing status"""
         try:
-            conn = self.get_connection()
+            conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
             cur = conn.cursor()
             
             cur.execute("""
@@ -371,5 +394,6 @@ class VectorDatabase:
             conn.close()
             
         except Exception as e:
-            logger.error(f"Failed to update processing status: {e}")
-            raise
+            error_msg = f"Failed to update processing status: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg) from e

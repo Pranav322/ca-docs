@@ -1,4 +1,13 @@
 import os
+import logging
+from dotenv import load_dotenv
+
+# Load environment variables from .env file FIRST
+load_dotenv()
+
+# Set up logging for configuration debugging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Azure OpenAI Configuration
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
@@ -7,13 +16,8 @@ AZURE_OPENAI_VERSION = os.getenv("AZURE_OPENAI_VERSION", "2024-02-01")
 AZURE_EMBEDDINGS_DEPLOYMENT = os.getenv("AZURE_EMBEDDINGS_DEPLOYMENT", "text-embedding-ada-002")
 AZURE_LLM_DEPLOYMENT = os.getenv("AZURE_LLM_DEPLOYMENT", "gpt-4")
 
-# Database Configuration
+# Database Configuration - Using DATABASE_URL for connection
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/ca_rag_db")
-PGHOST = os.getenv("PGHOST", "localhost")
-PGPORT = os.getenv("PGPORT", "5432")
-PGDATABASE = os.getenv("PGDATABASE", "ca_rag_db")
-PGUSER = os.getenv("PGUSER", "user")
-PGPASSWORD = os.getenv("PGPASSWORD", "password")
 
 # Appwrite Configuration
 APPWRITE_ENDPOINT = os.getenv("APPWRITE_ENDPOINT", "")

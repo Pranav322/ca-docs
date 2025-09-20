@@ -136,19 +136,20 @@ def render_file_upload():
 def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
     """Process uploaded PDF file"""
     try:
-        # Generate unique file ID
-        file_id = FileUtils.generate_file_id(uploaded_file.name)
-        
-        # Add file name to metadata
-        metadata['file_name'] = uploaded_file.name
-        
-        # Validate metadata
-        validated_metadata = ValidationUtils.validate_metadata(metadata)
-        
-        # Create temporary file
+        # Create temporary file first
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_file_path = tmp_file.name
+        
+        # Generate unique file ID using the actual file path
+        file_id = FileUtils.generate_file_id(tmp_file_path)
+        
+        # Add sanitized file name to metadata
+        sanitized_filename = FileUtils.sanitize_filename(uploaded_file.name)
+        metadata['file_name'] = sanitized_filename
+        
+        # Validate metadata
+        validated_metadata = ValidationUtils.validate_metadata(metadata)
         
         # Validate PDF
         if not FileUtils.validate_pdf_file(tmp_file_path):
@@ -172,7 +173,7 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
         
         st.session_state.vector_db.store_file_metadata(
             file_id=file_id,
-            file_name=uploaded_file.name,
+            file_name=sanitized_filename,
             appwrite_file_id=appwrite_file_id,
             level=validated_metadata['level'],
             paper=validated_metadata['paper'],
@@ -191,7 +192,7 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
         total_pages = pdf_results['metadata']['total_pages']
         st.session_state.vector_db.store_file_metadata(
             file_id=file_id,
-            file_name=uploaded_file.name,
+            file_name=sanitized_filename,
             appwrite_file_id=appwrite_file_id,
             level=validated_metadata['level'],
             paper=validated_metadata['paper'],
@@ -233,7 +234,7 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
             for i, chunk in enumerate(chunk_embeddings):
                 st.session_state.vector_db.store_document_chunk(
                     file_id=file_id,
-                    file_name=uploaded_file.name,
+                    file_name=sanitized_filename,
                     content=chunk['content'],
                     embedding=chunk['embedding'],
                     metadata=chunk['metadata'],
@@ -258,7 +259,7 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
             for i, table in enumerate(table_embeddings):
                 st.session_state.vector_db.store_table(
                     file_id=file_id,
-                    file_name=uploaded_file.name,
+                    file_name=sanitized_filename,
                     table_data=table['data'] if 'data' in table else {},
                     table_html=table.get('html', ''),
                     embedding=table['embedding'],
