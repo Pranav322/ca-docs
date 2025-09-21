@@ -90,13 +90,13 @@ class CurriculumSelector:
         level = st.session_state.get(f"{self.prefix}_level")
         
         if not level:
-            st.selectbox(label, ["Select Level First"], disabled=True, help="Please select a CA level first")
+            st.selectbox(label, ["Select Level First"], disabled=True, help="Please select a CA level first", key=f"{self.prefix}_paper_disabled")
             return None
         
         papers = curriculum_manager.get_papers(level)
         
         if not papers:
-            st.selectbox(label, ["No papers available"], disabled=True)
+            st.selectbox(label, ["No papers available"], disabled=True, key=f"{self.prefix}_paper_no_available")
             return None
         
         options = ["Select Paper"] + papers
@@ -132,7 +132,7 @@ class CurriculumSelector:
         paper = st.session_state.get(f"{self.prefix}_paper")
         
         if not level or not paper:
-            st.selectbox(label, ["Select Paper First"], disabled=True, help="Please select a paper first")
+            st.selectbox(label, ["Select Paper First"], disabled=True, help="Please select a paper first", key=f"{self.prefix}_chapter_paper_first")
             return None
         
         # Check if paper has modules
@@ -145,7 +145,7 @@ class CurriculumSelector:
         modules = curriculum_manager.get_modules(level, paper)
         
         if not modules:
-            st.selectbox(label, ["No modules available"], disabled=True)
+            st.selectbox(label, ["No modules available"], disabled=True, key=f"{self.prefix}_module_no_available")
             return None
         
         options = ["Select Module"] + modules
@@ -182,19 +182,19 @@ class CurriculumSelector:
         module = st.session_state.get(f"{self.prefix}_module")
         
         if not level or not paper:
-            st.selectbox(label, ["Select Paper First"], disabled=True, help="Please select a paper first")
+            st.selectbox(label, ["Select Paper First"], disabled=True, help="Please select a paper first", key=f"{self.prefix}_module_disabled")
             return None
         
         # Check if we need module selection
         has_modules = curriculum_manager.has_modules(level, paper)
         if has_modules and not module:
-            st.selectbox(label, ["Select Module First"], disabled=True, help="Please select a module first")
+            st.selectbox(label, ["Select Module First"], disabled=True, help="Please select a module first", key=f"{self.prefix}_chapter_module_first")
             return None
         
         chapters = curriculum_manager.get_chapters(level, paper, module)
         
         if not chapters:
-            st.selectbox(label, ["No chapters available"], disabled=True)
+            st.selectbox(label, ["No chapters available"], disabled=True, key=f"{self.prefix}_chapter_no_available")
             return None
         
         options = ["Select Chapter"] + chapters
@@ -232,7 +232,7 @@ class CurriculumSelector:
         chapter = st.session_state.get(f"{self.prefix}_chapter")
         
         if not level or not paper or not chapter:
-            st.selectbox(label, ["Select Chapter First"], disabled=True, help="Please select a chapter first")
+            st.selectbox(label, ["Select Chapter First"], disabled=True, help="Please select a chapter first", key=f"{self.prefix}_unit_chapter_first")
             return None
         
         # Check if chapter has units
@@ -245,7 +245,7 @@ class CurriculumSelector:
         units = curriculum_manager.get_units(level, paper, chapter, module)
         
         if not units:
-            st.selectbox(label, ["No units available"], disabled=True)
+            st.selectbox(label, ["No units available"], disabled=True, key=f"{self.prefix}_unit_no_available")
             return None
         
         options = ["Select Unit"] + units

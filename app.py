@@ -5,6 +5,7 @@ import uuid
 from typing import Dict, Any, List, Optional
 import logging
 import time
+from datetime import datetime
 
 # Import our custom modules
 from database import VectorDatabase
@@ -76,101 +77,207 @@ def render_sidebar():
 def render_file_upload():
     """Render file upload interface"""
     st.header("📄 Upload CA Study Materials")
-    st.markdown("Upload PDF files from CA syllabus with proper metadata tagging")
-    
-    # File upload
-    uploaded_file = st.file_uploader(
-        "Choose PDF file",
-        type=['pdf'],
-        help="Upload CA syllabus PDFs (Foundation, Intermediate, or Final level)"
-    )
-    
-    if uploaded_file is not None:
-        # Display file info
-        st.success(f"File selected: {uploaded_file.name} ({uploaded_file.size} bytes)")
-        
-        # Smart Curriculum-based Metadata Tagging
-        st.subheader("🏷️ Smart Curriculum Tagging")
-        st.markdown("Select the curriculum hierarchy to automatically tag your document")
-        
-        # Initialize curriculum selector for upload
-        upload_selector = CurriculumSelector(prefix="upload")
-        
-        # Render the curriculum selector
-        selection = upload_selector.render_complete_selector(
-            title="📖 Select Document Location in Curriculum",
-            show_path=True,
-            columns=True
-        )
-        
-        # Show selection status
-        upload_selector.render_selection_status()
-        
-        # Additional metadata form
-        with st.form("metadata_form"):
-            # Additional metadata
-            with st.expander("📋 Additional Information"):
-                description = st.text_area("Description (optional)", key="upload_description")
-                tags = st.text_input("Tags (comma-separated)", key="upload_tags")
-            
-            submitted = st.form_submit_button("🚀 Upload and Process")
-            
-            if submitted:
-                if not upload_selector.is_complete_selection():
-                    missing = upload_selector.get_missing_selections()
-                    st.error(f"Please complete the curriculum selection: {', '.join(missing)}")
-                else:
-                    # Get the final selection from the curriculum selector
-                    final_selection = upload_selector.get_current_selection()
-                    
-                    process_uploaded_file(uploaded_file, {
-                        'level': final_selection['level'],
-                        'paper': final_selection['paper'],
-                        'module': final_selection['module'],
-                        'chapter': final_selection['chapter'],
-                        'unit': final_selection['unit'],
-                        'description': description or None,
-                        'tags': [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
-                    })
+    st.markdown("Upload multiple PDF files from CA syllabus with proper metadata tagging")
 
-def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
-    """Process uploaded PDF file"""
+    # File upload - now supports multiple files
+    uploaded_files = st.file_uploader(
+        "Choose PDF files",
+        type=['pdf'],
+        accept_multiple_files=True,
+        help="Upload CA syllabus PDFs (Foundation, Intermediate, or Final level). Select multiple files to upload them as a batch."
+    )
+
+    if uploaded_files:
+        st.success(f"{len(uploaded_files)} file(s) selected")
+
+        # Display files and their curriculum selectors
+        st.subheader("🏷️ Curriculum Tagging for Each File")
+        st.markdown("Select the curriculum hierarchy for each document individually")
+
+        # Store file configurations
+        file_configs = {}
+
+        for i, uploaded_file in enumerate(uploaded_files):
+            with st.expander(f"📄 {uploaded_file.name} ({uploaded_file.size} bytes)", expanded=(i==0)):
+                st.markdown(f"**File {i+1}:** {uploaded_file.name}")
+
+                # Initialize curriculum selector for this file
+                file_selector = CurriculumSelector(prefix=f"file_{i}")
+
+                # Render the curriculum selector
+                selection = file_selector.render_complete_selector(
+                    title=f"📖 Select Curriculum for {uploaded_file.name}",
+                    show_path=True,
+                    columns=True
+                )
+
+                # Show selection status
+                file_selector.render_selection_status()
+
+                # Additional metadata for this file
+                with st.expander("📋 Additional Information"):
+                    description = st.text_area(
+                        "Description (optional)",
+                        key=f"description_{i}",
+                        help=f"Optional description for {uploaded_file.name}"
+                    )
+                    tags = st.text_input(
+                        "Tags (comma-separated)",
+                        key=f"tags_{i}",
+                        help=f"Optional tags for {uploaded_file.name}"
+                    )
+
+                # Store configuration
+                file_configs[i] = {
+                    'file': uploaded_file,
+                    'selector': file_selector,
+                    'description': description,
+                    'tags': tags
+                }
+
+        # Batch upload button
+        if st.button("🚀 Upload and Process All Files", type="primary", use_container_width=True):
+            # Validate all selections
+            invalid_files = []
+            for i, config in file_configs.items():
+                if not config['selector'].is_complete_selection():
+                    invalid_files.append(uploaded_files[i].name)
+
+            if invalid_files:
+                st.error(f"Please complete curriculum selection for: {', '.join(invalid_files)}")
+            else:
+                # Process all files sequentially with progress tracking
+                process_multiple_files(file_configs)
+
+def process_multiple_files(file_configs: Dict[int, Dict]):
+    """Process multiple uploaded files sequentially with progress tracking"""
+    total_files = len(file_configs)
+    processed_files = []
+    failed_files = []
+
+    # Create progress containers
+    overall_progress = st.progress(0)
+    overall_status = st.empty()
+    file_progress_container = st.empty()
+
+    overall_status.text(f"🚀 Starting batch processing of {total_files} files...")
+
+    for i, (file_index, config) in enumerate(file_configs.items()):
+        uploaded_file = config['file']
+        selector = config['selector']
+        description = config['description']
+        tags = config['tags']
+
+        # Get final selection
+        final_selection = selector.get_current_selection()
+
+        # Create file-specific progress display
+        with file_progress_container.container():
+            st.markdown(f"### 📄 Processing File {i+1}/{total_files}: {uploaded_file.name}")
+            file_progress = st.progress(0)
+            file_status = st.empty()
+
+        try:
+            # Process this file
+            result = process_single_file_with_progress(
+                uploaded_file, final_selection, description, tags,
+                file_progress, file_status
+            )
+
+            if result['success']:
+                processed_files.append(result)
+                st.success(f"✅ {uploaded_file.name} processed successfully!")
+            else:
+                failed_files.append({'file': uploaded_file.name, 'error': result['error']})
+                st.error(f"❌ {uploaded_file.name} failed: {result['error']}")
+
+        except Exception as e:
+            failed_files.append({'file': uploaded_file.name, 'error': str(e)})
+            st.error(f"❌ {uploaded_file.name} failed: {str(e)}")
+            logger.error(f"Batch processing error for {uploaded_file.name}: {e}")
+
+        # Update overall progress
+        overall_progress.progress((i + 1) / total_files)
+        overall_status.text(f"📊 Progress: {i + 1}/{total_files} files processed")
+
+    # Clear progress displays
+    file_progress_container.empty()
+
+    # Show final summary
+    overall_progress.progress(1.0)
+    overall_status.text("🎉 Batch processing completed!")
+
+    # Summary
+    st.subheader("📊 Batch Processing Summary")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Total Files", total_files)
+
+    with col2:
+        st.metric("Successfully Processed", len(processed_files))
+
+    with col3:
+        st.metric("Failed", len(failed_files))
+
+    if processed_files:
+        st.success("**Successfully processed files:**")
+        for result in processed_files:
+            st.write(f"• {result['file_name']} - {result['pages']} pages, {result['chunks']} chunks, {result['tables']} tables")
+
+    if failed_files:
+        st.error("**Failed files:**")
+        for failed in failed_files:
+            st.write(f"• {failed['file']}: {failed['error']}")
+
+    # Add processed files to session state
+    for result in processed_files:
+        st.session_state.uploaded_files.append({
+            'file_id': result['file_id'],
+            'file_name': result['file_name'],
+            'metadata': result['metadata'],
+            'status': 'completed',
+            'upload_time': time.time()
+        })
+
+
+def process_single_file_with_progress(uploaded_file, metadata: Dict[str, Any], description: str, tags: str,
+                                    progress_bar, status_text) -> Dict[str, Any]:
+    """Process a single file with progress tracking, returns result dict"""
     try:
         # Create temporary file first
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_file_path = tmp_file.name
-        
+
         # Generate unique file ID using the actual file path
         file_id = FileUtils.generate_file_id(tmp_file_path)
-        
+
         # Add sanitized file name to metadata
         sanitized_filename = FileUtils.sanitize_filename(uploaded_file.name)
         metadata['file_name'] = sanitized_filename
-        
+        metadata['description'] = description or None
+        metadata['tags'] = [tag.strip() for tag in tags.split(',') if tag.strip()] if tags else []
+
         # Validate metadata
         validated_metadata = ValidationUtils.validate_metadata(metadata)
-        
+
         # Validate PDF
         if not FileUtils.validate_pdf_file(tmp_file_path):
-            st.error("Invalid PDF file. Please upload a valid PDF.")
             FileUtils.cleanup_temp_file(tmp_file_path)
-            return
-        
-        # Initialize progress tracking
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
+            return {'success': False, 'error': 'Invalid PDF file'}
+
         # Step 1: Upload to Appwrite
         status_text.text("📤 Uploading file to storage...")
         progress_bar.progress(10)
-        
+
         appwrite_file_id = st.session_state.appwrite_client.upload_file(tmp_file_path, uploaded_file.name)
-        
+
         # Step 2: Store metadata
         status_text.text("💾 Storing file metadata...")
         progress_bar.progress(20)
-        
+
         st.session_state.vector_db.store_file_metadata(
             file_id=file_id,
             file_name=sanitized_filename,
@@ -181,13 +288,13 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
             chapter=validated_metadata.get('chapter'),
             unit=validated_metadata.get('unit')
         )
-        
+
         # Step 3: Process PDF content
         status_text.text("🔍 Extracting text and tables...")
         progress_bar.progress(30)
-        
+
         pdf_results = st.session_state.pdf_processor.extract_text_and_tables(tmp_file_path)
-        
+
         # Step 4: Update page count
         total_pages = pdf_results['metadata']['total_pages']
         st.session_state.vector_db.store_file_metadata(
@@ -201,16 +308,16 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
             unit=validated_metadata.get('unit'),
             total_pages=total_pages
         )
-        
+
         # Step 5: Process text chunks
         if pdf_results['text_chunks']:
             status_text.text("✂️ Processing text chunks...")
             progress_bar.progress(50)
-            
+
             # Create table-aware chunks
-            tables_info = [{'extraction_method': t.get('extraction_method', ''), 'rows': t.get('rows', 0)} 
+            tables_info = [{'extraction_method': t.get('extraction_method', ''), 'rows': t.get('rows', 0)}
                           for t in pdf_results['tables']]
-            
+
             processed_chunks = []
             for chunk_data in pdf_results['text_chunks']:
                 chunk_content = chunk_data['content']
@@ -218,19 +325,19 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
                     chunk_content, tables_info, chunk_size=1000, overlap=200
                 )
                 processed_chunks.extend(table_aware_chunks)
-            
+
             # Step 6: Generate embeddings for chunks
             status_text.text("🧠 Generating embeddings for text...")
             progress_bar.progress(70)
-            
+
             chunk_embeddings = st.session_state.embedding_manager.process_document_chunks(
                 processed_chunks, validated_metadata
             )
-            
+
             # Step 7: Store chunks in database
             status_text.text("💾 Storing text chunks...")
             progress_bar.progress(80)
-            
+
             for i, chunk in enumerate(chunk_embeddings):
                 st.session_state.vector_db.store_document_chunk(
                     file_id=file_id,
@@ -245,16 +352,16 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
                     chapter=validated_metadata.get('chapter'),
                     unit=validated_metadata.get('unit')
                 )
-        
+
         # Step 8: Process tables
         if pdf_results['tables']:
             status_text.text("📊 Processing tables...")
             progress_bar.progress(85)
-            
+
             table_embeddings = st.session_state.embedding_manager.process_tables(
                 pdf_results['tables'], validated_metadata
             )
-            
+
             # Store tables in database
             for i, table in enumerate(table_embeddings):
                 st.session_state.vector_db.store_table(
@@ -273,49 +380,70 @@ def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
                     chapter=validated_metadata.get('chapter'),
                     unit=validated_metadata.get('unit')
                 )
-        
+
         # Step 9: Update processing status
         status_text.text("✅ Finalizing...")
         progress_bar.progress(95)
-        
+
         st.session_state.vector_db.update_processing_status(file_id, "completed")
-        
+
         progress_bar.progress(100)
         status_text.text("🎉 Processing completed successfully!")
-        
+
         # Cleanup
         FileUtils.cleanup_temp_file(tmp_file_path)
-        
-        # Show summary
-        st.success(f"""
-        **File processed successfully!**
-        - **File:** {uploaded_file.name}
-        - **Level:** {validated_metadata['level']}
-        - **Paper:** {validated_metadata['paper']}
-        - **Total Pages:** {total_pages}
-        - **Text Chunks:** {len(pdf_results['text_chunks'])}
-        - **Tables Found:** {len(pdf_results['tables'])}
-        """)
-        
-        # Add to session state
-        st.session_state.uploaded_files.append({
+
+        return {
+            'success': True,
             'file_id': file_id,
             'file_name': uploaded_file.name,
             'metadata': validated_metadata,
-            'status': 'completed',
-            'upload_time': time.time()
-        })
-        
+            'pages': total_pages,
+            'chunks': len(pdf_results['text_chunks']),
+            'tables': len(pdf_results['tables'])
+        }
+
     except Exception as e:
-        st.error(f"Error processing file: {str(e)}")
         logger.error(f"File processing error: {e}")
-        
+
         # Cleanup on error
         try:
             if 'tmp_file_path' in locals():
                 FileUtils.cleanup_temp_file(tmp_file_path)
         except:
             pass
+
+        return {'success': False, 'error': str(e)}
+
+
+def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):
+    """Legacy function for single file processing - now delegates to the new function"""
+    result = process_single_file_with_progress(
+        uploaded_file, metadata, None, None,
+        st.progress(0), st.empty()
+    )
+
+    if result['success']:
+        st.success(f"""
+        **File processed successfully!**
+        - **File:** {uploaded_file.name}
+        - **Level:** {result['metadata']['level']}
+        - **Paper:** {result['metadata']['paper']}
+        - **Total Pages:** {result['pages']}
+        - **Text Chunks:** {result['chunks']}
+        - **Tables Found:** {result['tables']}
+        """)
+
+        # Add to session state
+        st.session_state.uploaded_files.append({
+            'file_id': result['file_id'],
+            'file_name': uploaded_file.name,
+            'metadata': result['metadata'],
+            'status': 'completed',
+            'upload_time': time.time()
+        })
+    else:
+        st.error(f"Error processing file: {result['error']}")
 
 def render_question_interface():
     """Render question answering interface"""
@@ -499,23 +627,48 @@ def render_file_management():
         
         # File statistics
         st.subheader("📈 Overview")
-        
+
         col1, col2, col3, col4 = st.columns(4)
-        
+
         with col1:
             st.metric("Total Files", len(all_files))
-        
+
         with col2:
             completed_files = len([f for f in all_files if f.get('processing_status') == 'completed'])
             st.metric("Processed", completed_files)
-        
+
         with col3:
             pending_files = len([f for f in all_files if f.get('processing_status') == 'pending'])
             st.metric("Pending", pending_files)
-        
+
         with col4:
             total_pages = sum(f.get('total_pages', 0) for f in all_files)
             st.metric("Total Pages", total_pages)
+
+        # Recent batch uploads (files uploaded within 5 minutes of each other)
+        if all_files:
+            st.subheader("📦 Recent Batch Uploads")
+
+            # Group files by upload time (within 5 minute windows)
+            sorted_files = sorted(all_files, key=lambda x: x.get('upload_date', ''), reverse=True)
+            batches = group_files_by_upload_time(sorted_files, time_window_minutes=5)
+
+            for i, batch in enumerate(batches[:3]):  # Show last 3 batches
+                if len(batch) > 1:  # Only show actual batches
+                    with st.expander(f"Batch {i+1}: {len(batch)} files uploaded {format_time_ago(batch[0].get('upload_date'))}", expanded=(i==0)):
+                        batch_col1, batch_col2 = st.columns([2, 1])
+
+                        with batch_col1:
+                            st.markdown("**Files in this batch:**")
+                            for file_data in batch:
+                                status_icon = "✅" if file_data.get('processing_status') == 'completed' else "⏳" if file_data.get('processing_status') == 'pending' else "❌"
+                                st.write(f"{status_icon} {file_data.get('file_name', 'Unknown')}")
+
+                        with batch_col2:
+                            completed_in_batch = len([f for f in batch if f.get('processing_status') == 'completed'])
+                            total_pages_batch = sum(f.get('total_pages', 0) for f in batch)
+                            st.metric("Completed", f"{completed_in_batch}/{len(batch)}")
+                            st.metric("Total Pages", total_pages_batch)
         
         # File list
         st.subheader("📋 File List")
@@ -587,11 +740,87 @@ def render_file_management():
         st.error(f"Error loading file management data: {str(e)}")
         logger.error(f"File management error: {e}")
 
+def group_files_by_upload_time(files: List[Dict], time_window_minutes: int = 5) -> List[List[Dict]]:
+    """Group files by upload time within a time window"""
+    if not files:
+        return []
+
+    batches = []
+    current_batch = [files[0]]
+
+    for file_data in files[1:]:
+        current_time = parse_upload_date(file_data.get('upload_date'))
+        last_time = parse_upload_date(current_batch[-1].get('upload_date'))
+
+        if current_time and last_time:
+            time_diff = abs((current_time - last_time).total_seconds()) / 60  # minutes
+            if time_diff <= time_window_minutes:
+                current_batch.append(file_data)
+            else:
+                if len(current_batch) > 1:  # Only add batches with multiple files
+                    batches.append(current_batch)
+                current_batch = [file_data]
+        else:
+            # If we can't parse dates, treat as separate
+            if len(current_batch) > 1:
+                batches.append(current_batch)
+            current_batch = [file_data]
+
+    # Add the last batch if it has multiple files
+    if len(current_batch) > 1:
+        batches.append(current_batch)
+
+    return batches
+
+def parse_upload_date(upload_date_str: str) -> Optional[datetime]:
+    """Parse upload date string to datetime object"""
+    if not upload_date_str:
+        return None
+
+    try:
+        # Try different date formats
+        formats = [
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%dT%H:%M:%S',
+            '%Y-%m-%d %H:%M:%S.%f',
+            '%Y-%m-%dT%H:%M:%S.%f'
+        ]
+
+        for fmt in formats:
+            try:
+                return datetime.strptime(upload_date_str, fmt)
+            except ValueError:
+                continue
+
+        return None
+    except Exception:
+        return None
+
+def format_time_ago(upload_date_str: str) -> str:
+    """Format upload date as time ago"""
+    upload_time = parse_upload_date(upload_date_str)
+    if not upload_time:
+        return "recently"
+
+    now = datetime.now()
+    diff = now - upload_time
+
+    if diff.days > 0:
+        return f"{diff.days} day{'s' if diff.days != 1 else ''} ago"
+    elif diff.seconds >= 3600:
+        hours = diff.seconds // 3600
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    elif diff.seconds >= 60:
+        minutes = diff.seconds // 60
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    else:
+        return "just now"
+
 def show_file_statistics(file_data: Dict[str, Any]):
     """Show detailed statistics for a file"""
     st.markdown("---")
     st.markdown(f"**📊 Detailed Statistics for {file_data.get('file_name')}**")
-    
+
     try:
         # This would query the database for chunk and table counts
         # For now, showing placeholder structure
@@ -600,7 +829,7 @@ def show_file_statistics(file_data: Dict[str, Any]):
         - Number of text chunks extracted
         - Number of tables found
         - Processing methods used
-        - Embedding generation statistics  
+        - Embedding generation statistics
         - Error logs (if any)
         """)
     except Exception as e:
