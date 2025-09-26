@@ -415,6 +415,216 @@ class CurriculumManager:
             path_parts.append(unit)
             
         return " → ".join(path_parts)
+    
+    def find_item_hierarchy(self, search_term: str, search_type: str = 'all') -> List[Dict[str, Any]]:
+        """
+        Find all items matching search term and return their full hierarchy
+        Uses flexible partial matching - you can search with any part of the name
+        
+        Args:
+            search_term: Term to search for (case-insensitive, partial matching)
+            search_type: Type to search ('all', 'unit', 'chapter', 'module', 'paper', 'level')
+        
+        Returns:
+            List of dictionaries with full hierarchy information
+        """
+        results = []
+        search_term_lower = search_term.lower().strip()
+        
+        # Split search term into words for better matching
+        search_words = search_term_lower.split()
+        
+        def _matches_search(text: str) -> bool:
+            """Check if text matches search criteria with flexible partial matching"""
+            text_lower = text.lower()
+            
+            # If no search words, return False
+            if not search_words:
+                return False
+            
+            # Check if all search words are found in the text (partial matching)
+            for word in search_words:
+                if word not in text_lower:
+                    return False
+            return True
+        
+        for level_name, level_data in self.curriculum_data.items():
+            if search_type in ['all', 'level'] and _matches_search(level_name):
+                results.append({
+                    'type': 'level',
+                    'match': level_name,
+                    'level': level_name,
+                    'paper': None,
+                    'module': None,
+                    'chapter': None,
+                    'unit': None,
+                    'display_path': level_name,
+                    'relevance': self._calculate_relevance(level_name, search_term_lower)
+                })
+            
+            for paper_name, paper_data in level_data.items():
+                if search_type in ['all', 'paper'] and _matches_search(paper_name):
+                    results.append({
+                        'type': 'paper',
+                        'match': paper_name,
+                        'level': level_name,
+                        'paper': paper_name,
+                        'module': None,
+                        'chapter': None,
+                        'unit': None,
+                        'display_path': f"{level_name} → {paper_name}",
+                        'relevance': self._calculate_relevance(paper_name, search_term_lower)
+                    })
+                
+                # Check if paper has modules or direct chapters
+                if 'chapters' in paper_data:
+                    # Direct chapters (no modules)
+                    for chapter_name, chapter_data in paper_data['chapters'].items():
+                        if search_type in ['all', 'chapter'] and _matches_search(chapter_name):
+                            results.append({
+                                'type': 'chapter',
+                                'match': chapter_name,
+                                'level': level_name,
+                                'paper': paper_name,
+                                'module': None,
+                                'chapter': chapter_name,
+                                'unit': None,
+                                'display_path': f"{level_name} → {paper_name} → {chapter_name}",
+                                'relevance': self._calculate_relevance(chapter_name, search_term_lower)
+                            })
+                        
+                        # Check for units in direct chapters
+                        if isinstance(chapter_data, dict) and 'units' in chapter_data:
+                            for unit_name in chapter_data['units'].keys():
+                                if search_type in ['all', 'unit'] and _matches_search(unit_name):
+                                    results.append({
+                                        'type': 'unit',
+                                        'match': unit_name,
+                                        'level': level_name,
+                                        'paper': paper_name,
+                                        'module': None,
+                                        'chapter': chapter_name,
+                                        'unit': unit_name,
+                                        'display_path': f"{level_name} → {paper_name} → {chapter_name} → {unit_name}",
+                                        'relevance': self._calculate_relevance(unit_name, search_term_lower)
+                                    })
+                else:
+                    # Paper has modules
+                    for module_name, module_data in paper_data.items():
+                        if module_name != 'chapters':  # Skip the chapters key if it exists
+                            if search_type in ['all', 'module'] and _matches_search(module_name):
+                                results.append({
+                                    'type': 'module',
+                                    'match': module_name,
+                                    'level': level_name,
+                                    'paper': paper_name,
+                                    'module': module_name,
+                                    'chapter': None,
+                                    'unit': None,
+                                    'display_path': f"{level_name} → {paper_name} → {module_name}",
+                                    'relevance': self._calculate_relevance(module_name, search_term_lower)
+                                })
+                            
+                            # Check chapters in modules
+                            if isinstance(module_data, dict):
+                                for chapter_name, chapter_data in module_data.items():
+                                    if chapter_name != 'units':  # Skip units key
+                                        if search_type in ['all', 'chapter'] and _matches_search(chapter_name):
+                                            results.append({
+                                                'type': 'chapter',
+                                                'match': chapter_name,
+                                                'level': level_name,
+                                                'paper': paper_name,
+                                                'module': module_name,
+                                                'chapter': chapter_name,
+                                                'unit': None,
+                                                'display_path': f"{level_name} → {paper_name} → {module_name} → {chapter_name}",
+                                                'relevance': self._calculate_relevance(chapter_name, search_term_lower)
+                                            })
+                                        
+                                        # Check for units in module chapters
+                                        if isinstance(chapter_data, dict) and 'units' in chapter_data:
+                                            for unit_name in chapter_data['units'].keys():
+                                                if search_type in ['all', 'unit'] and _matches_search(unit_name):
+                                                    results.append({
+                                                        'type': 'unit',
+                                                        'match': unit_name,
+                                                        'level': level_name,
+                                                        'paper': paper_name,
+                                                        'module': module_name,
+                                                        'chapter': chapter_name,
+                                                        'unit': unit_name,
+                                                        'display_path': f"{level_name} → {paper_name} → {module_name} → {chapter_name} → {unit_name}",
+                                                        'relevance': self._calculate_relevance(unit_name, search_term_lower)
+                                                    })
+        
+        # Sort results by relevance (higher relevance first)
+        results.sort(key=lambda x: x.get('relevance', 0), reverse=True)
+        return results
+    
+    def _calculate_relevance(self, text: str, search_term: str) -> float:
+        """Calculate relevance score for search results"""
+        text_lower = text.lower()
+        search_lower = search_term.lower()
+        
+        # Exact match gets highest score
+        if text_lower == search_lower:
+            return 1.0
+        
+        # Starts with search term gets high score
+        if text_lower.startswith(search_lower):
+            return 0.9
+        
+        # Contains search term as whole word gets medium-high score
+        if f" {search_lower} " in f" {text_lower} ":
+            return 0.8
+        
+        # Contains search term gets medium score
+        if search_lower in text_lower:
+            return 0.7
+        
+        # Partial word matches get lower scores
+        search_words = search_lower.split()
+        matches = sum(1 for word in search_words if word in text_lower)
+        return 0.5 * (matches / len(search_words)) if search_words else 0.0
+    
+    def get_all_items_by_type(self, item_type: str) -> List[Dict[str, Any]]:
+        """
+        Get all items of a specific type with their full hierarchy
+        
+        Args:
+            item_type: Type of items to get ('level', 'paper', 'module', 'chapter', 'unit')
+        
+        Returns:
+            List of dictionaries with full hierarchy information
+        """
+        return self.find_item_hierarchy('', item_type)
+    
+    def auto_fill_hierarchy_from_selection(self, selected_item: str, item_type: str) -> Optional[Dict[str, str]]:
+        """
+        Auto-fill hierarchy when a specific item is selected
+        
+        Args:
+            selected_item: The selected item name
+            item_type: Type of the selected item ('unit', 'chapter', 'module', 'paper', 'level')
+        
+        Returns:
+            Dictionary with complete hierarchy or None if not found
+        """
+        matches = self.find_item_hierarchy(selected_item, item_type)
+        
+        # Find exact match
+        for match in matches:
+            if match['match'].lower() == selected_item.lower() and match['type'] == item_type:
+                return {
+                    'level': match['level'],
+                    'paper': match['paper'],
+                    'module': match['module'],
+                    'chapter': match['chapter'],
+                    'unit': match['unit']
+                }
+        
+        return None
 
 # Global curriculum manager instance
 curriculum_manager = CurriculumManager()

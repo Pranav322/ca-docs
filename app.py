@@ -16,7 +16,7 @@ from rag_pipeline import RAGPipeline
 from appwrite_client import AppwriteClient
 from utils import FileUtils, ValidationUtils, ProgressTracker, ResponseFormatter
 from config import CA_LEVELS, CA_PAPERS
-from curriculum_ui import CurriculumSelector, render_curriculum_filter
+from curriculum_ui import CurriculumSelector, render_curriculum_filter, render_smart_curriculum_selector
 from curriculum_manager import curriculum_manager
 
 # Configure logging
@@ -66,9 +66,23 @@ def render_sidebar():
     if page == "📚 Ask Questions":
         st.sidebar.subheader("🎯 Filter by Syllabus")
         
-        # Use the new curriculum filter component
+        # Choice between smart and traditional filtering
+        filter_mode = st.sidebar.radio(
+            "Filter Mode",
+            ["🔍 Smart Search", "📋 Traditional"],
+            key="sidebar_filter_mode",
+            help="Smart Search for quick filtering or Traditional step-by-step"
+        )
+        
+        # Use the appropriate filter component
         with st.sidebar:
-            filters = render_curriculum_filter(prefix="sidebar_filter", title="", show_clear=True)
+            if filter_mode == "🔍 Smart Search":
+                filters = render_smart_curriculum_selector(
+                    prefix="sidebar_smart_filter",
+                    title=""
+                )
+            else:
+                filters = render_curriculum_filter(prefix="sidebar_filter", title="", show_clear=True)
             
             include_tables = st.checkbox("Include Tables", value=True, key="include_tables")
     
@@ -101,18 +115,34 @@ def render_file_upload():
             with st.expander(f"📄 {uploaded_file.name} ({uploaded_file.size} bytes)", expanded=(i==0)):
                 st.markdown(f"**File {i+1}:** {uploaded_file.name}")
 
-                # Initialize curriculum selector for this file
-                file_selector = CurriculumSelector(prefix=f"file_{i}")
-
-                # Render the curriculum selector
-                selection = file_selector.render_complete_selector(
-                    title=f"📖 Select Curriculum for {uploaded_file.name}",
-                    show_path=True,
-                    columns=True
+                # Choice between smart and traditional selector
+                selector_type = st.radio(
+                    "Selection Method",
+                    ["🔍 Smart Search", "📋 Traditional Cascading"],
+                    key=f"selector_type_{i}",
+                    horizontal=True,
+                    help="Smart Search: Type to find and auto-fill hierarchy. Traditional: Step-by-step selection."
                 )
 
-                # Show selection status
-                file_selector.render_selection_status()
+                if selector_type == "🔍 Smart Search":
+                    # Use the new smart curriculum selector
+                    selection = render_smart_curriculum_selector(
+                        prefix=f"smart_file_{i}",
+                        title=f"📖 Select Curriculum for {uploaded_file.name}"
+                    )
+                    
+                    # Create a compatible selector object for validation
+                    from curriculum_ui import SmartCurriculumSelector
+                    file_selector = SmartCurriculumSelector(prefix=f"smart_file_{i}")
+                else:
+                    # Use traditional selector
+                    file_selector = CurriculumSelector(prefix=f"file_{i}")
+                    selection = file_selector.render_complete_selector(
+                        title=f"📖 Select Curriculum for {uploaded_file.name}",
+                        show_path=True,
+                        columns=True
+                    )
+                    file_selector.render_selection_status()
 
                 # Additional metadata for this file
                 with st.expander("📋 Additional Information"):
@@ -478,12 +508,22 @@ def render_question_interface():
             st.error("Please enter a valid question (5-1000 characters).")
             return
         
-        # Get filters from the new curriculum selector in sidebar
-        level_filter = st.session_state.get('sidebar_filter_level')
-        paper_filter = st.session_state.get('sidebar_filter_paper')
-        module_filter = st.session_state.get('sidebar_filter_module')
-        chapter_filter = st.session_state.get('sidebar_filter_chapter')
-        unit_filter = st.session_state.get('sidebar_filter_unit')
+        # Get filters from the appropriate selector in sidebar
+        filter_mode = st.session_state.get('sidebar_filter_mode', '📋 Traditional')
+        
+        if filter_mode == "🔍 Smart Search":
+            level_filter = st.session_state.get('sidebar_smart_filter_level')
+            paper_filter = st.session_state.get('sidebar_smart_filter_paper')
+            module_filter = st.session_state.get('sidebar_smart_filter_module')
+            chapter_filter = st.session_state.get('sidebar_smart_filter_chapter')
+            unit_filter = st.session_state.get('sidebar_smart_filter_unit')
+        else:
+            level_filter = st.session_state.get('sidebar_filter_level')
+            paper_filter = st.session_state.get('sidebar_filter_paper')
+            module_filter = st.session_state.get('sidebar_filter_module')
+            chapter_filter = st.session_state.get('sidebar_filter_chapter')
+            unit_filter = st.session_state.get('sidebar_filter_unit')
+        
         include_tables = st.session_state.get('include_tables', True)
         
         # Show processing
