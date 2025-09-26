@@ -1,4 +1,4 @@
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import pdfplumber
 import pandas as pd
 from typing import List, Dict, Tuple, Any
