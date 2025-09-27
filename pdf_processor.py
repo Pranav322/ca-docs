@@ -150,8 +150,19 @@ class PDFProcessor:
                     for table_idx, table in enumerate(page_tables):
                         if table and len(table) > 1:  # Ensure table has content
                             # Convert to DataFrame
-                            # Clean column names and data
-                            columns = [str(col) if col is not None else f'col_{i}' for i, col in enumerate(table[0])]
+                            # Clean column names and data - handle duplicates
+                            raw_columns = [str(col) if col is not None else f'col_{i}' for i, col in enumerate(table[0])]
+                            # Make column names unique
+                            columns = []
+                            col_counts = {}
+                            for col in raw_columns:
+                                if col in col_counts:
+                                    col_counts[col] += 1
+                                    columns.append(f"{col}_{col_counts[col]}")
+                                else:
+                                    col_counts[col] = 0
+                                    columns.append(col)
+                            
                             df = pd.DataFrame(table[1:], columns=columns)
                             
                             # Get context around table
@@ -203,6 +214,20 @@ class PDFProcessor:
                             df = df.dropna(how='all').dropna(axis=1, how='all')
                             
                             if isinstance(df, pd.DataFrame) and not df.empty and len(df) > 1:
+                                # Fix duplicate column names
+                                if df.columns.duplicated().any():
+                                    new_columns = []
+                                    col_counts = {}
+                                    for col in df.columns:
+                                        col_str = str(col)
+                                        if col_str in col_counts:
+                                            col_counts[col_str] += 1
+                                            new_columns.append(f"{col_str}_{col_counts[col_str]}")
+                                        else:
+                                            col_counts[col_str] = 0
+                                            new_columns.append(col_str)
+                                    df.columns = new_columns
+                                
                                 # Replace NaN values with empty strings for JSON compatibility
                                 df = df.fillna('')
                                 
@@ -248,6 +273,20 @@ class PDFProcessor:
                     df = df.dropna(how='all').dropna(axis=1, how='all')
                     
                     if not df.empty:
+                        # Fix duplicate column names
+                        if df.columns.duplicated().any():
+                            new_columns = []
+                            col_counts = {}
+                            for col in df.columns:
+                                col_str = str(col)
+                                if col_str in col_counts:
+                                    col_counts[col_str] += 1
+                                    new_columns.append(f"{col_str}_{col_counts[col_str]}")
+                                else:
+                                    col_counts[col_str] = 0
+                                    new_columns.append(col_str)
+                            df.columns = new_columns
+                        
                         # Replace NaN values with empty strings for JSON compatibility
                         df = df.fillna('')
                         

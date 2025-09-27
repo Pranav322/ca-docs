@@ -81,6 +81,7 @@ class VectorDatabase:
                     file_id TEXT UNIQUE NOT NULL,
                     file_name TEXT NOT NULL,
                     appwrite_file_id TEXT,
+                    source_file TEXT,
                     level TEXT,
                     paper TEXT,
                     module TEXT,
@@ -91,6 +92,12 @@ class VectorDatabase:
                     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     processed_date TIMESTAMP
                 );
+            """)
+            
+            # Add source_file column if it doesn't exist (for existing databases)
+            cur.execute("""
+                ALTER TABLE file_metadata 
+                ADD COLUMN IF NOT EXISTS source_file TEXT;
             """)
             
             # Create indexes for better performance
@@ -174,7 +181,7 @@ class VectorDatabase:
     
     def store_file_metadata(self, file_id: str, file_name: str, appwrite_file_id: str,
                            level: str, paper: str, module: str = None, chapter: str = None,
-                           unit: str = None, total_pages: int = 0) -> int:
+                           unit: str = None, total_pages: int = 0, source_file: str = None) -> int:
         """Store file metadata"""
         try:
             conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
@@ -190,14 +197,16 @@ class VectorDatabase:
             logger.info(f"chapter: '{chapter}' (type: {type(chapter)})")
             logger.info(f"unit: '{unit}' (type: {type(unit)})")
             logger.info(f"total_pages: {total_pages} (type: {type(total_pages)})")
+            logger.info(f"source_file: '{source_file}' (type: {type(source_file)})")
             
             cur.execute("""
-                INSERT INTO file_metadata (file_id, file_name, appwrite_file_id, level, paper,
+                INSERT INTO file_metadata (file_id, file_name, appwrite_file_id, source_file, level, paper,
                                          module, chapter, unit, total_pages)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (file_id) DO UPDATE SET
                     file_name = EXCLUDED.file_name,
                     appwrite_file_id = EXCLUDED.appwrite_file_id,
+                    source_file = EXCLUDED.source_file,
                     level = EXCLUDED.level,
                     paper = EXCLUDED.paper,
                     module = EXCLUDED.module,
@@ -205,7 +214,7 @@ class VectorDatabase:
                     unit = EXCLUDED.unit,
                     total_pages = EXCLUDED.total_pages
                 RETURNING id;
-            """, (file_id, file_name, appwrite_file_id, level, paper, module or '', chapter or '', unit or '', total_pages))
+            """, (file_id, file_name, appwrite_file_id, source_file or '', level, paper, module or '', chapter or '', unit or '', total_pages))
             
             result = cur.fetchone()
             if result is None:

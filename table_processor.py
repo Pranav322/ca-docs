@@ -93,19 +93,21 @@ class TableProcessor:
             text_to_analyze = ""
             
             if 'columns' in table_data:
-                text_to_analyze += " ".join(table_data['columns'])
+                # Convert all column names to strings
+                columns = [str(col) for col in table_data['columns']]
+                text_to_analyze += " ".join(columns)
             
             if 'context_before' in table_data:
-                text_to_analyze += " " + table_data.get('context_before', '')
+                text_to_analyze += " " + str(table_data.get('context_before', ''))
             
             if 'context_after' in table_data:
-                text_to_analyze += " " + table_data.get('context_after', '')
+                text_to_analyze += " " + str(table_data.get('context_after', ''))
             
             if 'data' in table_data and table_data['data']:
-                # Add first row content
+                # Add first row content - ensure all values are strings
                 first_row = table_data['data'][0]
                 if isinstance(first_row, dict):
-                    text_to_analyze += " " + " ".join(str(v) for v in first_row.values())
+                    text_to_analyze += " " + " ".join(str(v) for v in first_row.values() if v is not None)
             
             text_to_analyze = text_to_analyze.lower()
             
