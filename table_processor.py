@@ -36,12 +36,15 @@ class TableProcessor:
             columns = table_data.get('columns', [])
             context_before = table_data.get('context_before', '')
             context_after = table_data.get('context_after', '')
-            
+
             if not data or not columns:
                 return f"Table from page {table_data.get('page_number', 'unknown')}: No data available"
-            
+
+            # Ensure columns are strings to prevent join errors
+            columns = [str(col) for col in columns]
+
             # Create DataFrame for processing
-            df = pd.DataFrame(data)
+            df = pd.DataFrame(data, columns=columns)
             
             # Identify table type
             table_type = self._identify_table_type(table_data)
