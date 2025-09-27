@@ -648,7 +648,12 @@ def render_answer_display(answer_data: Dict[str, Any], question: str):
     if answer_data.get('suggestions'):
         st.markdown("**💡 Related Questions:**")
         for i, suggestion in enumerate(answer_data['suggestions']):
-            if st.button(suggestion, key=f"suggest_{i}_{hash(suggestion)}_{hash(question)}"):
+            # Create a safer key using string slicing instead of hash
+            safe_suggestion_key = suggestion.replace(" ", "_").replace("?", "").replace(".", "")[:50]
+            safe_question_key = question.replace(" ", "_").replace("?", "").replace(".", "")[:30]
+            button_key = f"suggest_{i}_{safe_suggestion_key}_{safe_question_key}"
+            
+            if st.button(suggestion, key=button_key):
                 st.session_state.suggested_question = suggestion
                 st.rerun()
 
