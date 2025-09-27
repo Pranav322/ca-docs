@@ -402,14 +402,18 @@ class BatchIngestor:
         Create temporary copy of PDF file for processing
         """
         loop = asyncio.get_event_loop()
-        
+
         def _copy_file():
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+            # Use a custom temp directory with more space instead of /tmp
+            temp_dir = os.path.join(os.getcwd(), 'temp_processing')
+            os.makedirs(temp_dir, exist_ok=True)
+
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf', dir=temp_dir)
             temp_path = temp_file.name
             temp_file.close()
             shutil.copy2(source_path, temp_path)
             return temp_path
-        
+
         return await loop.run_in_executor(None, _copy_file)
 
     async def _upload_to_appwrite(self, file_path: str, file_name: str) -> str:
@@ -510,7 +514,7 @@ class BatchIngestor:
         """
         total_time = self.stats['end_time'] - self.stats['start_time']
         total_hours = total_time / 3600
-        
+
         logger.info("🏆 " + "="*58)
         logger.info("🏆 BATCH PROCESSING COMPLETED")
         logger.info("🏆 " + "="*58)
@@ -519,19 +523,34 @@ class BatchIngestor:
         logger.info(f"❌ Failed: {self.stats['failed']}")
         logger.info(f"🔁 Retries: {self.stats['retries']}")
         logger.info(f"⏱️ Total time: {total_hours:.2f}h ({total_time:.1f}s)")
-        
+
         if self.stats['completed'] > 0:
             avg_time = total_time / self.stats['completed']
             avg_minutes = avg_time / 60
             logger.info(f"⏱️ Average time per file: {avg_minutes:.1f}m ({avg_time:.1f}s)")
-        
+
         if self.failed_files:
             failed_names = [task.file_name for task in self.tasks if task.file_id in self.failed_files]
             logger.info(f"⚠️ Failed files ({len(failed_names)}): {failed_names[:5]}{'...' if len(failed_names) > 5 else ''}")
-        
+
         success_rate = (self.stats['completed'] / self.stats['total_files']) * 100 if self.stats['total_files'] > 0 else 0
         logger.info(f"🎯 Success rate: {success_rate:.1f}%")
         logger.info("🏆 " + "="*58)
+
+        # Cleanup temp processing directory
+        self._cleanup_temp_processing_dir()
+
+    def _cleanup_temp_processing_dir(self) -> None:
+        """
+        Clean up the temp_processing directory after batch processing
+        """
+        try:
+            temp_dir = os.path.join(os.getcwd(), 'temp_processing')
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                logger.info(f"Cleaned up temp processing directory: {temp_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp processing directory: {e}")
 
 async def main():
     """
