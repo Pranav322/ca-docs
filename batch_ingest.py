@@ -19,6 +19,7 @@ from pathlib import Path
 import concurrent.futures
 from dataclasses import dataclass
 from enum import Enum
+from threading import Lock
 
 # Import existing components
 from database import VectorDatabase
@@ -92,8 +93,60 @@ class BatchIngestor:
         self.tasks: List[FileTask] = []
         self.completed_files = set()
         self.failed_files = set()
+        self.progress_lock = Lock()
+        self.last_progress_update = 0
         
         logger.info(f"Batch Ingestor initialized with {max_workers} workers, max {retry_attempts} retries")
+
+    def _update_progress(self) -> None:
+        """
+        Update and display progress information (thread-safe)
+        """
+        with self.progress_lock:
+            current_time = time.time()
+            # Update progress every 30 seconds or on significant events
+            if current_time - self.last_progress_update < 30 and self.stats['completed'] + self.stats['failed'] < self.stats['total_files']:
+                return
+                
+            completed = self.stats['completed']
+            failed = self.stats['failed']
+            total = self.stats['total_files']
+            remaining = total - completed - failed
+            
+            if total > 0:
+                progress_pct = ((completed + failed) / total) * 100
+                elapsed_time = current_time - self.stats['start_time']
+                
+                # Calculate ETA
+                if completed > 0:
+                    avg_time_per_file = elapsed_time / (completed + failed)
+                    eta_seconds = avg_time_per_file * remaining
+                    eta_hours = eta_seconds / 3600
+                    eta_display = f"{eta_hours:.1f}h" if eta_hours >= 1 else f"{eta_seconds/60:.0f}m"
+                else:
+                    eta_display = "calculating..."
+                
+                logger.info(f"📊 PROGRESS: {completed}/{total} completed ({progress_pct:.1f}%) | {failed} failed | {remaining} remaining | ETA: {eta_display}")
+                
+                # Show recent completions
+                if hasattr(self, '_recent_completions'):
+                    recent = self._recent_completions[-3:]  # Show last 3
+                    if recent:
+                        logger.info(f"✅ Recently completed: {', '.join(recent)}")
+                        
+            self.last_progress_update = current_time
+
+    def _add_recent_completion(self, filename: str) -> None:
+        """
+        Track recent completions for progress display
+        """
+        if not hasattr(self, '_recent_completions'):
+            self._recent_completions = []
+        
+        self._recent_completions.append(filename)
+        # Keep only last 10
+        if len(self._recent_completions) > 10:
+            self._recent_completions = self._recent_completions[-10:]
 
     def discover_files(self) -> List[FileTask]:
         """
@@ -238,7 +291,9 @@ class BatchIngestor:
         self.stats['total_files'] = len(tasks)
         self.stats['start_time'] = time.time()
         
-        logger.info(f"Starting batch processing of {len(tasks)} files with {self.max_workers} workers")
+        logger.info(f"🚀 Starting batch processing of {len(tasks)} files with {self.max_workers} workers")
+        logger.info(f"📋 Processing plan: {len(tasks)} files total")
+        self._update_progress()  # Show initial progress
         
         # Create semaphore to limit concurrent processing
         semaphore = asyncio.Semaphore(self.max_workers)
@@ -282,8 +337,10 @@ class BatchIngestor:
                     task.status = ProcessingStatus.COMPLETED
                     self.completed_files.add(task.file_id)
                     self.stats['completed'] += 1
+                    self._add_recent_completion(task.file_name)
                     
                     logger.info(f"✅ Completed {task.file_name} in {task.processing_time:.1f}s")
+                    self._update_progress()  # Update progress after each completion
                     break
                     
                 except Exception as e:
@@ -295,6 +352,7 @@ class BatchIngestor:
                         self.failed_files.add(task.file_id)
                         self.stats['failed'] += 1
                         logger.error(f"🚫 Permanently failed {task.file_name} after {task.max_attempts} attempts")
+                        self._update_progress()  # Update progress after failure
 
     async def _process_single_file(self, task: FileTask) -> None:
         """
@@ -451,26 +509,29 @@ class BatchIngestor:
         Print final processing statistics
         """
         total_time = self.stats['end_time'] - self.stats['start_time']
+        total_hours = total_time / 3600
         
-        logger.info("="*60)
-        logger.info("BATCH PROCESSING COMPLETED")
-        logger.info("="*60)
-        logger.info(f"Total files: {self.stats['total_files']}")
-        logger.info(f"Completed: {self.stats['completed']}")
-        logger.info(f"Failed: {self.stats['failed']}")
-        logger.info(f"Retries: {self.stats['retries']}")
-        logger.info(f"Total time: {total_time:.1f}s")
+        logger.info("🏆 " + "="*58)
+        logger.info("🏆 BATCH PROCESSING COMPLETED")
+        logger.info("🏆 " + "="*58)
+        logger.info(f"📊 Total files: {self.stats['total_files']}")
+        logger.info(f"✅ Completed: {self.stats['completed']}")
+        logger.info(f"❌ Failed: {self.stats['failed']}")
+        logger.info(f"🔁 Retries: {self.stats['retries']}")
+        logger.info(f"⏱️ Total time: {total_hours:.2f}h ({total_time:.1f}s)")
         
         if self.stats['completed'] > 0:
             avg_time = total_time / self.stats['completed']
-            logger.info(f"Average time per file: {avg_time:.1f}s")
+            avg_minutes = avg_time / 60
+            logger.info(f"⏱️ Average time per file: {avg_minutes:.1f}m ({avg_time:.1f}s)")
         
         if self.failed_files:
-            logger.info(f"Failed files: {[task.file_name for task in self.tasks if task.file_id in self.failed_files]}")
+            failed_names = [task.file_name for task in self.tasks if task.file_id in self.failed_files]
+            logger.info(f"⚠️ Failed files ({len(failed_names)}): {failed_names[:5]}{'...' if len(failed_names) > 5 else ''}")
         
         success_rate = (self.stats['completed'] / self.stats['total_files']) * 100 if self.stats['total_files'] > 0 else 0
-        logger.info(f"Success rate: {success_rate:.1f}%")
-        logger.info("="*60)
+        logger.info(f"🎯 Success rate: {success_rate:.1f}%")
+        logger.info("🏆 " + "="*58)
 
 async def main():
     """
