@@ -25,6 +25,7 @@ async def test_batch_ingest():
     """
     Test batch ingestion with a small subset of files
     """
+    logger.info("=== Starting test_batch_ingest ===")
     try:
         # Check if ca folder exists
         ca_folder = Path("ca")
@@ -32,13 +33,15 @@ async def test_batch_ingest():
             logger.error("CA folder not found. Please ensure 'ca' folder exists with PDF files.")
             return
         
+        logger.info("=== CA folder check passed ===")
         # Initialize batch ingestor with fewer workers for testing
         ingestor = BatchIngestor(
             ca_folder_path="ca",
-            max_workers=2,  # Use fewer workers for testing
+            max_workers=3,  # Use fewer workers for testing
             retry_attempts=2
         )
         
+        logger.info("=== BatchIngestor initialized ===")
         # Test file discovery
         logger.info("=== Testing File Discovery ===")
         tasks = ingestor.discover_files()
@@ -59,50 +62,63 @@ async def test_batch_ingest():
         valid_files = [task for task in tasks if ingestor._validate_metadata(task.metadata)]
         logger.info(f"Valid files: {len(valid_files)}/{len(tasks)}")
         
+        logger.info("=== Metadata validation complete ===")
         # Check for existing files
         logger.info("=== Testing Existing Files Check ===")
         new_tasks = ingestor.check_existing_files(tasks)
         logger.info(f"New files to process: {len(new_tasks)}")
         
-        # Ask user if they want to continue with actual processing
+        # Process first 3 files for testing
         if new_tasks:
+            logger.info("=== New files check complete ===")
             logger.info(f"Would process {len(new_tasks)} files with these settings:")
             logger.info(f"  Max workers: {ingestor.max_workers}")
             logger.info(f"  Retry attempts: {ingestor.retry_attempts}")
-            
-            # Check for shutdown request before prompting
+
+            # Check for shutdown request
             if shutdown_requested:
                 logger.info("Shutdown requested before processing")
                 return
-            
-            # Process just one file for testing if user confirms
-            response = input("Process one test file? (y/N): ").strip().lower()
-            if response in ['y', 'yes']:
-                logger.info("=== Testing Single File Processing ===")
-                test_task = new_tasks[0]
-                logger.info(f"Processing test file: {test_task.file_name}")
-                
-                # Process just one file
+
+            # Process first 3 files for testing
+            test_tasks = new_tasks[:3]
+            logger.info(f"=== Testing First {len(test_tasks)} Files ===")
+            for i, task in enumerate(test_tasks):
+                logger.info(f"  {i+1}. {task.file_name}")
+
+            try:
+                await ingestor.process_batch(test_tasks)
+                logger.info(f"Successfully processed {len(test_tasks)} test files")
+
+                # Verify the status updates
+                logger.info("=== Verifying Status Updates ===")
+                for task in test_tasks:
+                    metadata = ingestor.vector_db.get_file_metadata(task.file_id)
+                    if metadata and len(metadata) > 0:
+                        status = metadata[0].get('processing_status')
+                        logger.info(f"  {task.file_name}: status = {status}")
+                        if status != 'completed':
+                            logger.error(f"  ❌ Status not updated for {task.file_name}")
+                        else:
+                            logger.info(f"  ✅ Status correctly updated for {task.file_name}")
+                    else:
+                        logger.error(f"  ❌ No metadata found for {task.file_name}")
+
+            except KeyboardInterrupt:
+                logger.info("Processing interrupted by user (Ctrl+C)")
+                return
+            except Exception as e:
+                logger.error(f"Processing failed: {e}")
+                raise
+            finally:
+                # Ensure cleanup of resources
                 try:
-                    await ingestor.process_batch([test_task])
-                    logger.info("Single file processing completed successfully")
-                except KeyboardInterrupt:
-                    logger.info("Processing interrupted by user (Ctrl+C)")
-                    return
-                except Exception as e:
-                    logger.error(f"Processing failed: {e}")
-                    raise
-                finally:
-                    # Ensure cleanup of resources
-                    try:
-                        if hasattr(ingestor, 'vector_db') and hasattr(ingestor.vector_db, 'close'):
-                            await ingestor.vector_db.close()
-                        elif hasattr(ingestor, 'vector_db') and hasattr(ingestor.vector_db.pool, 'close'):
-                            await ingestor.vector_db.pool.close()
-                    except Exception as cleanup_error:
-                        logger.warning(f"Cleanup error (non-critical): {cleanup_error}")
-            else:
-                logger.info("Skipping actual processing")
+                    if hasattr(ingestor, 'vector_db') and hasattr(ingestor.vector_db, 'close'):
+                        await ingestor.vector_db.close()
+                    elif hasattr(ingestor, 'vector_db') and hasattr(ingestor.vector_db.pool, 'close'):
+                        await ingestor.vector_db.pool.close()
+                except Exception as cleanup_error:
+                    logger.warning(f"Cleanup error (non-critical): {cleanup_error}")
         else:
             logger.info("No new files to process")
         

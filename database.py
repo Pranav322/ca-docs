@@ -1,4 +1,5 @@
 import psycopg2
+from psycopg2 import pool  # Import the connection pool module
 from psycopg2.extras import RealDictCursor
 import numpy as np
 import json
@@ -12,12 +13,15 @@ logger = logging.getLogger(__name__)
 class VectorDatabase:
     def __init__(self):
         self.connection_url = DATABASE_URL
+        self.pool = None  # Initialize pool to None
         self.init_database()
     
     def get_connection(self):
-        """Get database connection"""
+        """Get database connection from the pool"""
         try:
-            conn = psycopg2.connect(self.connection_url, cursor_factory=RealDictCursor)
+            if self.pool is None:
+                self.pool = pool.SimpleConnectionPool(1, 20, dsn=self.connection_url, cursor_factory=RealDictCursor)  # min 1, max 20 connections
+            conn = self.pool.getconn()
             return conn
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
@@ -30,9 +34,12 @@ class VectorDatabase:
             cur = conn.cursor()
             
             # Enable pgvector extension
+            logger.info("=== Enabling pgvector extension ===")
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            logger.info("=== pgvector extension enabled ===")
             
             # Create documents table for text chunks
+            logger.info("=== Creating documents table ===")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
                     id SERIAL PRIMARY KEY,
@@ -53,6 +60,7 @@ class VectorDatabase:
             """)
             
             # Create tables table for extracted tables
+            logger.info("=== Creating tables table ===")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS tables (
                     id SERIAL PRIMARY KEY,
@@ -75,6 +83,7 @@ class VectorDatabase:
             """)
             
             # Create file_metadata table
+            logger.info("=== Creating file_metadata table ===")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS file_metadata (
                     id SERIAL PRIMARY KEY,
@@ -95,6 +104,7 @@ class VectorDatabase:
             """)
             
             # Add source_file column if it doesn't exist (for existing databases)
+            logger.info("=== Adding source_file column to file_metadata table ===")
             cur.execute("""
                 ALTER TABLE file_metadata 
                 ADD COLUMN IF NOT EXISTS source_file TEXT;
@@ -111,7 +121,7 @@ class VectorDatabase:
             
             conn.commit()
             cur.close()
-            conn.close()
+            # No need to close connection here when using a pool.
             logger.info("Database initialized successfully")
             
         except Exception as e:
@@ -124,7 +134,7 @@ class VectorDatabase:
                            chapter: str = None, unit: str = None) -> int:
         """Store a document chunk with its embedding"""
         try:
-            conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
+            conn = self.get_connection()  # Get connection from the pool
             cur = conn.cursor()
             
             cur.execute("""
@@ -135,10 +145,10 @@ class VectorDatabase:
             """, (file_id, file_name, content, embedding, json.dumps(metadata), 
                   chunk_index, level or '', paper or '', module or '', chapter or '', unit or ''))
             
-            doc_id = cur.fetchone()[0]
+            doc_id = cur.fetchone()['id']
             conn.commit()
             cur.close()
-            conn.close()
+            self.pool.putconn(conn)  # Return connection to the pool
             
             return doc_id
             
@@ -154,7 +164,7 @@ class VectorDatabase:
                    chapter: str = None, unit: str = None) -> int:
         """Store extracted table with its embedding"""
         try:
-            conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
+            conn = self.get_connection()  # Get connection from the pool
             cur = conn.cursor()
             
             cur.execute("""
@@ -167,10 +177,10 @@ class VectorDatabase:
                   context_before, context_after, page_number, table_index,
                   level or '', paper or '', module or '', chapter or '', unit or ''))
             
-            table_id = cur.fetchone()[0]
+            table_id = cur.fetchone()['id']
             conn.commit()
             cur.close()
-            conn.close()
+            self.pool.putconn(conn)  # Return connection to the pool
             
             return table_id
             
@@ -184,7 +194,7 @@ class VectorDatabase:
                            unit: str = None, total_pages: int = 0, source_file: str = None) -> int:
         """Store file metadata"""
         try:
-            conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
+            conn = self.get_connection()  # Get connection from the pool
             cur = conn.cursor()
             
             logger.info(f"=== STORE_FILE_METADATA CALLED ===")
@@ -220,11 +230,11 @@ class VectorDatabase:
             if result is None:
                 raise Exception(f"Failed to insert/update file_metadata - no ID returned for file_id: {file_id}")
             
-            metadata_id = result[0]
+            metadata_id = result['id']
             logger.info(f"Successfully stored file metadata with ID: {metadata_id}")
             conn.commit()
             cur.close()
-            conn.close()
+            self.pool.putconn(conn)  # Return connection to the pool
             
             return metadata_id
             
@@ -389,19 +399,29 @@ class VectorDatabase:
     def update_processing_status(self, file_id: str, status: str):
         """Update file processing status"""
         try:
-            conn = psycopg2.connect(self.connection_url)  # Don't use RealDictCursor here
+            conn = self.get_connection()  # Get connection from the pool
             cur = conn.cursor()
-            
+
+            logger.info(f"=== UPDATE_PROCESSING_STATUS CALLED ===")
+            logger.info(f"file_id: '{file_id}' (type: {type(file_id)})")
+            logger.info(f"status: '{status}' (type: {type(status)})")
+
             cur.execute("""
-                UPDATE file_metadata 
+                UPDATE file_metadata
                 SET processing_status = %s, processed_date = CURRENT_TIMESTAMP
                 WHERE file_id = %s;
             """, (status, file_id))
-            
+
+            # Check how many rows were updated
+            updated_rows = cur.rowcount
+            logger.info(f"Updated {updated_rows} rows")
+
             conn.commit()
             cur.close()
-            conn.close()
-            
+            self.pool.putconn(conn)  # Return connection to the pool
+
+            logger.info(f"Successfully updated processing status for file_id: {file_id}")
+
         except Exception as e:
             error_msg = f"Failed to update processing status: {str(e)}"
             logger.error(error_msg)

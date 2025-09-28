@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 class AppwriteClient:
     def __init__(self):
+        # Check for required environment variables
+        if not all([APPWRITE_ENDPOINT, APPWRITE_PROJECT_ID, APPWRITE_API_KEY, APPWRITE_BUCKET_ID]):
+            logger.error("Missing required Appwrite environment variables.")
+            raise Exception("Missing required Appwrite environment variables.")
+
         self.client = Client()
         self.client.set_endpoint(APPWRITE_ENDPOINT)
         self.client.set_project(APPWRITE_PROJECT_ID)
@@ -31,27 +36,32 @@ class AppwriteClient:
     def _ensure_setup(self):
         """Ensure database and collections are set up"""
         try:
+            logger.info("=== Checking Appwrite database existence ===")
             # Try to get database, create if doesn't exist
             try:
                 self.databases.get(self.database_id)
-            except Exception:
-                logger.info("Creating Appwrite database...")
+                logger.info("=== Appwrite database exists ===")
+            except Exception as e:
+                logger.warning(f"Appwrite database get timed out or failed: {e}")
+                logger.info("=== Creating Appwrite database ===")
                 self.databases.create(
                     database_id=self.database_id,
                     name="CA RAG Metadata Database"
                 )
             
+            logger.info("=== Checking Appwrite collection existence ===")
             # Try to get collection, create if doesn't exist
             try:
                 self.databases.get_collection(self.database_id, self.collection_id)
-            except Exception:
-                logger.info("Creating Appwrite collection...")
+                logger.info("=== Appwrite collection exists ===")
+            except Exception as e:
+                logger.warning(f"Appwrite collection get timed out or failed: {e}")
+                logger.info("=== Creating Appwrite collection ===")
                 self.databases.create_collection(
                     database_id=self.database_id,
                     collection_id=self.collection_id,
                     name="File Metadata Collection"
                 )
-                
                 # Create attributes for the collection
                 attributes = [
                     {"key": "file_id", "type": "string", "size": 255, "required": True},

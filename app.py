@@ -6,6 +6,13 @@ from typing import Dict, Any, List, Optional
 import logging
 import time
 from datetime import datetime
+import asyncio
+import nest_asyncio
+from streamlit.runtime.scriptrunner import add_script_run_ctx
+import threading
+
+# Apply nest_asyncio
+nest_asyncio.apply()
 
 # Import our custom modules
 from database import VectorDatabase
@@ -29,6 +36,11 @@ if 'initialized' not in st.session_state:
     st.session_state.processing_status = {}
     st.session_state.uploaded_files = []
     st.session_state.chat_history = []
+
+def run_async_task(async_func, *args, **kwargs):
+    """Run an async function in the current event loop"""
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(async_func(*args, **kwargs))
 
 def initialize_components():
     """Initialize all components"""
@@ -176,62 +188,37 @@ def render_file_upload():
             if invalid_files:
                 st.error(f"Please complete curriculum selection for: {', '.join(invalid_files)}")
             else:
-                # Process all files sequentially with progress tracking
-                process_multiple_files(file_configs)
+                # Process all files using the new async function
+                run_async_task(process_multiple_files, file_configs)
 
-def process_multiple_files(file_configs: Dict[int, Dict]):
-    """Process multiple uploaded files sequentially with progress tracking"""
+async def process_multiple_files(file_configs: Dict[int, Dict], max_workers: int = 16):
+    """Process multiple uploaded files concurrently with progress tracking"""
     total_files = len(file_configs)
-    processed_files = []
-    failed_files = []
-
+    
     # Create progress containers
     overall_progress = st.progress(0)
     overall_status = st.empty()
-    file_progress_container = st.empty()
+    
+    overall_status.text(f"🚀 Starting batch processing of {total_files} files with {max_workers} workers...")
 
-    overall_status.text(f"🚀 Starting batch processing of {total_files} files...")
-
+    # Create a semaphore to limit concurrency
+    semaphore = asyncio.Semaphore(max_workers)
+    
+    # Prepare tasks
+    tasks = []
     for i, (file_index, config) in enumerate(file_configs.items()):
-        uploaded_file = config['file']
-        selector = config['selector']
-        description = config['description']
-        tags = config['tags']
-
-        # Get final selection
-        final_selection = selector.get_current_selection()
-
-        # Create file-specific progress display
-        with file_progress_container.container():
-            st.markdown(f"### 📄 Processing File {i+1}/{total_files}: {uploaded_file.name}")
-            file_progress = st.progress(0)
-            file_status = st.empty()
-
-        try:
-            # Process this file
-            result = process_single_file_with_progress(
-                uploaded_file, final_selection, description, tags,
-                file_progress, file_status
+        tasks.append(
+            process_single_file_async(
+                i, total_files, config, semaphore
             )
+        )
 
-            if result['success']:
-                processed_files.append(result)
-                st.success(f"✅ {uploaded_file.name} processed successfully!")
-            else:
-                failed_files.append({'file': uploaded_file.name, 'error': result['error']})
-                st.error(f"❌ {uploaded_file.name} failed: {result['error']}")
+    # Run tasks concurrently
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        except Exception as e:
-            failed_files.append({'file': uploaded_file.name, 'error': str(e)})
-            st.error(f"❌ {uploaded_file.name} failed: {str(e)}")
-            logger.error(f"Batch processing error for {uploaded_file.name}: {e}")
-
-        # Update overall progress
-        overall_progress.progress((i + 1) / total_files)
-        overall_status.text(f"📊 Progress: {i + 1}/{total_files} files processed")
-
-    # Clear progress displays
-    file_progress_container.empty()
+    # Process results
+    processed_files = [r for r in results if isinstance(r, dict) and r.get('success')]
+    failed_files = [r for r in results if not (isinstance(r, dict) and r.get('success'))]
 
     # Show final summary
     overall_progress.progress(1.0)
@@ -239,15 +226,11 @@ def process_multiple_files(file_configs: Dict[int, Dict]):
 
     # Summary
     st.subheader("📊 Batch Processing Summary")
-
     col1, col2, col3 = st.columns(3)
-
     with col1:
         st.metric("Total Files", total_files)
-
     with col2:
         st.metric("Successfully Processed", len(processed_files))
-
     with col3:
         st.metric("Failed", len(failed_files))
 
@@ -259,7 +242,10 @@ def process_multiple_files(file_configs: Dict[int, Dict]):
     if failed_files:
         st.error("**Failed files:**")
         for failed in failed_files:
-            st.write(f"• {failed['file']}: {failed['error']}")
+            if isinstance(failed, dict):
+                st.write(f"• {failed.get('file', 'Unknown')}: {failed.get('error', 'Unknown error')}")
+            else:
+                st.write(f"• An unexpected error occurred: {str(failed)}")
 
     # Add processed files to session state
     for result in processed_files:
@@ -272,9 +258,60 @@ def process_multiple_files(file_configs: Dict[int, Dict]):
         })
 
 
-def process_single_file_with_progress(uploaded_file, metadata: Dict[str, Any], description: str, tags: str,
-                                    progress_bar, status_text) -> Dict[str, Any]:
-    """Process a single file with progress tracking, returns result dict"""
+async def process_single_file_async(file_index: int, total_files: int, config: Dict, semaphore: asyncio.Semaphore) -> Dict:
+    """Asynchronous wrapper for processing a single file"""
+    async with semaphore:
+        loop = asyncio.get_event_loop()
+        
+        # Get data from config
+        uploaded_file = config['file']
+        selector = config['selector']
+        description = config['description']
+        tags = config['tags']
+        final_selection = selector.get_current_selection()
+
+        # Create a container for this file's progress
+        container = st.empty()
+        with container.container():
+            st.markdown(f"### ⏳ Waiting to process: {uploaded_file.name}")
+
+        try:
+            # Get the current script run context
+            ctx = st.runtime.scriptrunner.get_script_run_ctx()
+
+            # Create a wrapper function that sets the context
+            def context_wrapper():
+                add_script_run_ctx(threading.current_thread(), ctx)
+                return process_single_file_with_progress(
+                    file_index,
+                    total_files,
+                    uploaded_file,
+                    final_selection,
+                    description,
+                    tags,
+                    container
+                )
+
+            # Run the synchronous processing function in a thread pool
+            result = await loop.run_in_executor(
+                None,  # Uses the default ThreadPoolExecutor
+                context_wrapper
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Error in async file processing for {uploaded_file.name}: {e}")
+            return {'success': False, 'file': uploaded_file.name, 'error': str(e)}
+
+def process_single_file_with_progress(file_index: int, total_files: int, uploaded_file, metadata: Dict[str, Any],
+                                    description: str, tags: str, container) -> Dict[str, Any]:
+    """Process a single file with progress tracking, returns result dict. This is a synchronous function."""
+    
+    # Update UI within the container
+    with container.container():
+        st.markdown(f"### 📄 Processing File {file_index + 1}/{total_files}: {uploaded_file.name}")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
     try:
         # Create temporary file first
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -423,6 +460,9 @@ def process_single_file_with_progress(uploaded_file, metadata: Dict[str, Any], d
         # Cleanup
         FileUtils.cleanup_temp_file(tmp_file_path)
 
+        with container.container():
+            st.success(f"✅ {uploaded_file.name} processed successfully!")
+
         return {
             'success': True,
             'file_id': file_id,
@@ -434,7 +474,9 @@ def process_single_file_with_progress(uploaded_file, metadata: Dict[str, Any], d
         }
 
     except Exception as e:
-        logger.error(f"File processing error: {e}")
+        logger.error(f"File processing error for {uploaded_file.name}: {e}")
+        with container.container():
+            st.error(f"❌ Error processing {uploaded_file.name}: {e}")
 
         # Cleanup on error
         try:
@@ -443,7 +485,7 @@ def process_single_file_with_progress(uploaded_file, metadata: Dict[str, Any], d
         except:
             pass
 
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'file': uploaded_file.name, 'error': str(e)}
 
 
 def process_uploaded_file(uploaded_file, metadata: Dict[str, Any]):

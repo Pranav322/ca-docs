@@ -74,10 +74,18 @@ class BatchIngestor:
         self.retry_attempts = retry_attempts
         
         # Initialize components
+        logger.info("=== Initializing VectorDatabase ===")
         self.vector_db = VectorDatabase()
+        logger.info("=== VectorDatabase initialized ===")
+        logger.info("=== Initializing PDFProcessor ===")
         self.pdf_processor = PDFProcessor()
+        logger.info("=== PDFProcessor initialized ===")
+        logger.info("=== Initializing EmbeddingManager ===")
         self.embedding_manager = EmbeddingManager()
+        logger.info("=== EmbeddingManager initialized ===")
+        logger.info("=== Initializing AppwriteClient ===")
         self.appwrite_client = AppwriteClient()
+        logger.info("=== AppwriteClient initialized ===")
         
         # Processing stats
         self.stats = {
@@ -382,14 +390,17 @@ class BatchIngestor:
             # Step 6: Store everything in vector database
             await self._store_in_database(
                 task.file_id,
-                task.file_name, 
+                task.file_name,
                 appwrite_file_id,
                 processed_chunks,
                 processed_tables,
                 task.metadata,
                 pdf_results.get('metadata', {})
             )
-            
+
+            # Mark file as completed
+            self.vector_db.update_processing_status(task.file_id, 'completed')
+
             logger.info(f"Successfully processed {task.file_name}: {len(processed_chunks)} chunks, {len(processed_tables)} tables")
             
         finally:
