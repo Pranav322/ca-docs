@@ -194,6 +194,37 @@ class CurriculumManager:
             logger.error(f"Error parsing JSON curriculum: {e}")
             return {}
     
+    def _group_sub_papers(self):
+        """Group sub-papers (e.g., Paper-3A, Paper-3B) into a single main paper."""
+        for level_name, level_data in self.curriculum_data.items():
+            papers_to_group = {}
+            
+            # Find papers that need grouping
+            for paper_name in list(level_data.keys()):
+                match = re.match(r'(Paper-\d+)[A-Z]:\s*(.*)', paper_name)
+                if match:
+                    main_paper_base = match.group(1)
+                    if main_paper_base not in papers_to_group:
+                        papers_to_group[main_paper_base] = []
+                    papers_to_group[main_paper_base].append(paper_name)
+            
+            # Group the papers
+            for main_paper_base, sub_paper_names in papers_to_group.items():
+                # Create a new main paper name, e.g., "Paper-3: Quantitative Aptitude"
+                # This assumes the first sub-paper's name is representative
+                first_sub_paper_name = sub_paper_names[0]
+                main_paper_title = re.sub(r'[A-Z]:\s*', ': ', first_sub_paper_name)
+                
+                # Create the new main paper entry
+                if main_paper_title not in level_data:
+                    level_data[main_paper_title] = {}
+                
+                # Move sub-paper content into the new main paper entry
+                for sub_paper_name in sub_paper_names:
+                    sub_paper_content = level_data.pop(sub_paper_name)
+                    # Use the sub-paper name as a key under the main paper, like a module
+                    level_data[main_paper_title][sub_paper_name] = sub_paper_content
+
     def _normalize_level_name(self, level: str) -> str:
         """Normalize level names to consistent format"""
         level_lower = level.lower()
