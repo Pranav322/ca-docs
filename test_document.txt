@@ -1,4 +1,0 @@
-Test CA Document Content
-This is a test document for CA curriculum testing.
-Chapter: Financial Reporting
-Unit: Introduction to Accounting Standards

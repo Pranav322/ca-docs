@@ -1,3 +1,5 @@
+import asyncio
+import concurrent.futures
 import pymupdf as fitz  # PyMuPDF
 import pdfplumber
 import pandas as pd
@@ -11,6 +13,7 @@ import pytesseract
 import cv2
 import numpy as np
 from PIL import Image
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,78 +32,120 @@ except ImportError:
     TABULA_AVAILABLE = False
     logger.warning("Tabula not available - table extraction will use pdfplumber only")
 
-class PDFProcessor:
-    def __init__(self):
+class OptimizedPDFProcessor:
+    def __init__(self, max_workers: int = 4):
         self.supported_formats = ['.pdf']
+        self.max_workers = max_workers
+        # Cache for processed pages to avoid reprocessing
+        self.page_cache = {}
+        
+    async def extract_text_and_tables_async(self, pdf_path: str) -> Dict[str, Any]:
+        """
+        Optimized PDF processing with parallel extraction methods
+        """
+        start_time = time.time()
+        
+        try:
+            # First, get basic info and cache pages
+            basic_info = await self._get_basic_pdf_info(pdf_path)
+            
+            # Run extraction methods in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Submit all extraction tasks
+                tasks = []
+                
+                # Text extraction task
+                text_task = executor.submit(self._process_with_pymupdf, pdf_path)
+                tasks.append(('text', text_task))
+                
+                # Table extraction tasks (run in parallel)
+                table_task = executor.submit(self._process_with_pdfplumber, pdf_path)
+                tasks.append(('tables_pdfplumber', table_task))
+                
+                if CAMELOT_AVAILABLE:
+                    camelot_task = executor.submit(self._process_with_camelot, pdf_path)
+                    tasks.append(('tables_camelot', camelot_task))
+                
+                if TABULA_AVAILABLE:
+                    tabula_task = executor.submit(self._process_with_tabula, pdf_path)
+                    tasks.append(('tables_tabula', tabula_task))
+                
+                # OCR task (only if needed - check if pages have little text)
+                if basic_info.get('needs_ocr', False):
+                    ocr_task = executor.submit(self._process_with_ocr, pdf_path)
+                    tasks.append(('ocr', ocr_task))
+                
+                # Wait for all tasks to complete
+                results = {}
+                for task_name, task in tasks:
+                    try:
+                        results[task_name] = task.result(timeout=60)  # 60 second timeout per task
+                    except Exception as e:
+                        logger.warning(f"Task {task_name} failed: {e}")
+                        results[task_name] = {'text_chunks': [], 'tables': []}
+            
+            # Combine results
+            combined_results = self._combine_extraction_results(results, basic_info)
+            
+            # Post-process (deduplicate, add context)
+            final_results = self._post_process_results(combined_results)
+            
+            processing_time = time.time() - start_time
+            logger.info(f"PDF processing completed in {processing_time:.2f}s - Found {len(final_results['text_chunks'])} text chunks and {len(final_results['tables'])} tables")
+            
+            return final_results
+            
+        except Exception as e:
+            logger.error(f"Optimized PDF processing failed: {e}")
+            raise
     
     def extract_text_and_tables(self, pdf_path: str) -> Dict[str, Any]:
         """
-        Comprehensive PDF processing to extract text, tables, and metadata
-        Returns structured data with text chunks and table data
+        Synchronous wrapper for async processing
         """
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            results = {
-                'text_chunks': [],
-                'tables': [],
-                'metadata': {
-                    'total_pages': 0,
-                    'has_images': False,
-                    'has_tables': False,
-                    'processing_methods': []
-                }
+            return loop.run_until_complete(self.extract_text_and_tables_async(pdf_path))
+        finally:
+            loop.close()
+    
+    async def _get_basic_pdf_info(self, pdf_path: str) -> Dict[str, Any]:
+        """Quick scan to get basic PDF info and determine if OCR is needed"""
+        try:
+            doc = fitz.open(pdf_path)
+            total_pages = len(doc)
+            needs_ocr = False
+            has_images = False
+            
+            # Quick check first few pages to determine if OCR is needed
+            check_pages = min(3, total_pages)
+            for page_num in range(check_pages):
+                page = doc.load_page(page_num)
+                text = page.get_text().strip()
+                
+                if len(text) < 50:  # Very little text, might need OCR
+                    needs_ocr = True
+                
+                # Check for images
+                image_list = page.get_images()
+                if image_list:
+                    has_images = True
+            
+            doc.close()
+            
+            return {
+                'total_pages': total_pages,
+                'needs_ocr': needs_ocr,
+                'has_images': has_images
             }
             
-            # Process with PyMuPDF for text and basic structure
-            pymupdf_results = self._process_with_pymupdf(pdf_path)
-            results['text_chunks'].extend(pymupdf_results['text_chunks'])
-            results['metadata']['total_pages'] = pymupdf_results['total_pages']
-            results['metadata']['has_images'] = pymupdf_results['has_images']
-            results['metadata']['processing_methods'].append('PyMuPDF')
-            
-            # Process with pdfplumber for enhanced table detection
-            pdfplumber_results = self._process_with_pdfplumber(pdf_path)
-            results['tables'].extend(pdfplumber_results['tables'])
-            if pdfplumber_results['tables']:
-                results['metadata']['has_tables'] = True
-                results['metadata']['processing_methods'].append('pdfplumber')
-            
-            # Process with camelot for robust table extraction (if available)
-            if CAMELOT_AVAILABLE:
-                camelot_results = self._process_with_camelot(pdf_path)
-                results['tables'].extend(camelot_results['tables'])
-                if camelot_results['tables']:
-                    results['metadata']['has_tables'] = True
-                    results['metadata']['processing_methods'].append('camelot')
-            
-            # Process with tabula for additional table extraction (if available)
-            if TABULA_AVAILABLE:
-                tabula_results = self._process_with_tabula(pdf_path)
-                results['tables'].extend(tabula_results['tables'])
-                if tabula_results['tables']:
-                    results['metadata']['has_tables'] = True
-                    results['metadata']['processing_methods'].append('tabula')
-            
-            # Process scanned pages with OCR if needed
-            ocr_results = self._process_with_ocr(pdf_path)
-            if ocr_results['text_chunks']:
-                results['text_chunks'].extend(ocr_results['text_chunks'])
-                results['metadata']['processing_methods'].append('OCR')
-            
-            # Deduplicate and merge tables
-            results['tables'] = self._deduplicate_tables(results['tables'])
-            
-            # Add table context to text chunks
-            results = self._add_table_context(results)
-            
-            logger.info(f"PDF processing completed. Found {len(results['text_chunks'])} text chunks and {len(results['tables'])} tables")
-            return results
-            
         except Exception as e:
-            logger.error(f"PDF processing failed: {e}")
-            raise
+            logger.error(f"Failed to get basic PDF info: {e}")
+            return {'total_pages': 0, 'needs_ocr': False, 'has_images': False}
     
     def _process_with_pymupdf(self, pdf_path: str) -> Dict[str, Any]:
-        """Extract text and basic information using PyMuPDF"""
+        """Extract text using PyMuPDF - optimized version"""
         try:
             doc = fitz.open(pdf_path)
             text_chunks = []
@@ -138,7 +183,7 @@ class PDFProcessor:
             return {'text_chunks': [], 'total_pages': 0, 'has_images': False}
     
     def _process_with_pdfplumber(self, pdf_path: str) -> Dict[str, Any]:
-        """Extract tables using pdfplumber"""
+        """Extract tables using pdfplumber - optimized version"""
         try:
             tables = []
             
@@ -148,45 +193,15 @@ class PDFProcessor:
                     page_tables = page.extract_tables()
                     
                     for table_idx, table in enumerate(page_tables):
-                        if table and len(table) > 1:  # Ensure table has content
-                            # Convert to DataFrame
-                            # Clean column names and data - handle duplicates
-                            raw_columns = [str(col) if col is not None else f'col_{i}' for i, col in enumerate(table[0])]
-                            # Make column names unique
-                            columns = []
-                            col_counts = {}
-                            for col in raw_columns:
-                                if col in col_counts:
-                                    col_counts[col] += 1
-                                    columns.append(f"{col}_{col_counts[col]}")
-                                else:
-                                    col_counts[col] = 0
-                                    columns.append(col)
-                            
-                            df = pd.DataFrame(table[1:], columns=columns)
-                            
-                            # Get context around table
-                            context_before, context_after = self._get_table_context(
-                                page, table, page_num + 1
-                            )
-                            
-                            # Replace NaN values with empty strings for JSON compatibility
-                            df = df.fillna('')
-                            
-                            table_data = {
-                                'data': df.to_dict('records'),
-                                'columns': list(df.columns),
-                                'html': df.to_html(index=False, classes='table table-striped'),
-                                'page_number': page_num + 1,
-                                'table_index': table_idx,
-                                'context_before': context_before,
-                                'context_after': context_after,
-                                'extraction_method': 'pdfplumber',
-                                'rows': len(df),
-                                'cols': len(df.columns)
-                            }
-                            
-                            tables.append(table_data)
+                        if table and len(table) > 1:
+                            try:
+                                # Optimized table processing
+                                table_data = self._process_table_data(table, page_num + 1, table_idx, 'pdfplumber')
+                                if table_data:
+                                    tables.append(table_data)
+                            except Exception as e:
+                                logger.warning(f"Failed to process table {table_idx} on page {page_num + 1}: {e}")
+                                continue
             
             return {'tables': tables}
             
@@ -195,57 +210,30 @@ class PDFProcessor:
             return {'tables': []}
     
     def _process_with_camelot(self, pdf_path: str) -> Dict[str, Any]:
-        """Extract tables using camelot"""
+        """Extract tables using camelot - optimized version"""
         if not CAMELOT_AVAILABLE:
             return {'tables': []}
         try:
             tables = []
             
-            # Use both lattice and stream methods
+            # Use both methods but with timeout
             for method in ['lattice', 'stream']:
                 try:
                     camelot_tables = camelot.read_pdf(pdf_path, flavor=method, pages='all')
                     
                     for table_idx, table in enumerate(camelot_tables):
-                        if table.accuracy > 50:  # Only use tables with good accuracy
-                            df = table.df
-                            
-                            # Clean the dataframe
-                            df = df.dropna(how='all').dropna(axis=1, how='all')
-                            
-                            if isinstance(df, pd.DataFrame) and not df.empty and len(df) > 1:
-                                # Fix duplicate column names
-                                if df.columns.duplicated().any():
-                                    new_columns = []
-                                    col_counts = {}
-                                    for col in df.columns:
-                                        col_str = str(col)
-                                        if col_str in col_counts:
-                                            col_counts[col_str] += 1
-                                            new_columns.append(f"{col_str}_{col_counts[col_str]}")
-                                        else:
-                                            col_counts[col_str] = 0
-                                            new_columns.append(col_str)
-                                    df.columns = new_columns
+                        if table.accuracy > 50:  # Only use high accuracy tables
+                            try:
+                                df = table.df
+                                df = df.dropna(how='all').dropna(axis=1, how='all')
                                 
-                                # Replace NaN values with empty strings for JSON compatibility
-                                df = df.fillna('')
-                                
-                                table_data = {
-                                    'data': df.to_dict('records'),
-                                    'columns': list(df.columns),
-                                    'html': df.to_html(index=False, classes='table table-striped'),
-                                    'page_number': table.page,
-                                    'table_index': table_idx,
-                                    'extraction_method': f'camelot-{method}',
-                                    'accuracy': table.accuracy,
-                                    'rows': len(df),
-                                    'cols': len(df.columns),
-                                    'context_before': '',
-                                    'context_after': ''
-                                }
-                                
-                                tables.append(table_data)
+                                if isinstance(df, pd.DataFrame) and not df.empty and len(df) > 1:
+                                    table_data = self._process_dataframe_table(df, table.page, table_idx, f'camelot-{method}', table.accuracy)
+                                    if table_data:
+                                        tables.append(table_data)
+                            except Exception as e:
+                                logger.warning(f"Failed to process camelot table {table_idx}: {e}")
+                                continue
                                 
                 except Exception as method_error:
                     logger.warning(f"Camelot {method} method failed: {method_error}")
@@ -258,52 +246,26 @@ class PDFProcessor:
             return {'tables': []}
     
     def _process_with_tabula(self, pdf_path: str) -> Dict[str, Any]:
-        """Extract tables using tabula"""
+        """Extract tables using tabula - optimized version"""
         if not TABULA_AVAILABLE:
             return {'tables': []}
         try:
             tables = []
             
-            # Read all tables from PDF
             tabula_tables = tabula_py.read_pdf(pdf_path, pages='all', multiple_tables=True)
             
             for table_idx, df in enumerate(tabula_tables):
                 if isinstance(df, pd.DataFrame) and not df.empty and len(df) > 1:
-                    # Clean the dataframe
-                    df = df.dropna(how='all').dropna(axis=1, how='all')
-                    
-                    if not df.empty:
-                        # Fix duplicate column names
-                        if df.columns.duplicated().any():
-                            new_columns = []
-                            col_counts = {}
-                            for col in df.columns:
-                                col_str = str(col)
-                                if col_str in col_counts:
-                                    col_counts[col_str] += 1
-                                    new_columns.append(f"{col_str}_{col_counts[col_str]}")
-                                else:
-                                    col_counts[col_str] = 0
-                                    new_columns.append(col_str)
-                            df.columns = new_columns
+                    try:
+                        df = df.dropna(how='all').dropna(axis=1, how='all')
                         
-                        # Replace NaN values with empty strings for JSON compatibility
-                        df = df.fillna('')
-                        
-                        table_data = {
-                            'data': df.to_dict('records'),
-                            'columns': list(df.columns),
-                            'html': df.to_html(index=False, classes='table table-striped'),
-                            'page_number': 0,  # tabula doesn't provide page info easily
-                            'table_index': table_idx,
-                            'extraction_method': 'tabula',
-                            'rows': len(df),
-                            'cols': len(df.columns),
-                            'context_before': '',
-                            'context_after': ''
-                        }
-                        
-                        tables.append(table_data)
+                        if not df.empty:
+                            table_data = self._process_dataframe_table(df, 0, table_idx, 'tabula')
+                            if table_data:
+                                tables.append(table_data)
+                    except Exception as e:
+                        logger.warning(f"Failed to process tabula table {table_idx}: {e}")
+                        continue
             
             return {'tables': tables}
             
@@ -312,7 +274,7 @@ class PDFProcessor:
             return {'tables': []}
     
     def _process_with_ocr(self, pdf_path: str) -> Dict[str, Any]:
-        """Process scanned pages with OCR"""
+        """Process scanned pages with OCR - optimized version"""
         try:
             text_chunks = []
             doc = fitz.open(pdf_path)
@@ -320,38 +282,19 @@ class PDFProcessor:
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
                 
-                # Check if page has extractable text
+                # Check if page needs OCR (has little extractable text)
                 text = page.get_text().strip()
-                
-                # If no text or very little text, try OCR
-                if len(text) < 50:
+                if len(text) < 50:  # Threshold for OCR
                     try:
-                        # Convert page to image
-                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better OCR
-                        img_data = pix.tobytes("png")
-                        
-                        # Convert to PIL Image
-                        image = Image.open(io.BytesIO(img_data))
-                        
-                        # Preprocess image for better OCR
-                        image = self._preprocess_image_for_ocr(image)
-                        
-                        # Perform OCR
-                        ocr_text = pytesseract.image_to_string(image, lang='eng')
-                        
-                        if ocr_text.strip():
+                        # Optimized OCR processing
+                        ocr_text = self._extract_text_with_ocr(page, page_num + 1)
+                        if ocr_text:
                             text_chunks.append({
-                                'content': ocr_text.strip(),
+                                'content': ocr_text,
                                 'page_number': page_num + 1,
                                 'extraction_method': 'OCR',
                                 'content_type': 'text_ocr'
                             })
-                        
-                        # Try to extract tables from OCR text
-                        ocr_tables = self._extract_tables_from_ocr(image, page_num + 1)
-                        if ocr_tables:
-                            text_chunks.extend(ocr_tables)
-                            
                     except Exception as ocr_error:
                         logger.warning(f"OCR failed for page {page_num + 1}: {ocr_error}")
                         continue
@@ -363,8 +306,30 @@ class PDFProcessor:
             logger.error(f"OCR processing failed: {e}")
             return {'text_chunks': []}
     
-    def _preprocess_image_for_ocr(self, image: Image.Image) -> Image.Image:
-        """Preprocess image for better OCR results"""
+    def _extract_text_with_ocr(self, page, page_number: int) -> str:
+        """Optimized OCR extraction for a single page"""
+        try:
+            # Convert page to image with optimized settings
+            pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))  # Reduced resolution for speed
+            img_data = pix.tobytes("png")
+            
+            # Convert to PIL Image
+            image = Image.open(io.BytesIO(img_data))
+            
+            # Quick preprocessing
+            image = self._preprocess_image_for_ocr_fast(image)
+            
+            # Perform OCR with optimized settings
+            ocr_text = pytesseract.image_to_string(image, lang='eng', config='--psm 6')
+            
+            return ocr_text.strip() if ocr_text.strip() else None
+            
+        except Exception as e:
+            logger.warning(f"OCR extraction failed for page {page_number}: {e}")
+            return None
+    
+    def _preprocess_image_for_ocr_fast(self, image: Image.Image) -> Image.Image:
+        """Fast image preprocessing for OCR"""
         try:
             # Convert PIL Image to OpenCV format
             opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
@@ -372,11 +337,8 @@ class PDFProcessor:
             # Convert to grayscale
             gray = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
             
-            # Apply Gaussian blur to reduce noise
-            blurred = cv2.GaussianBlur(gray, (1, 1), 0)
-            
-            # Apply threshold to get black and white image
-            _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            # Apply simple threshold (faster than OTSU)
+            _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
             
             # Convert back to PIL Image
             processed_image = Image.fromarray(thresh)
@@ -384,113 +346,141 @@ class PDFProcessor:
             return processed_image
             
         except Exception as e:
-            logger.warning(f"Image preprocessing failed: {e}")
+            logger.warning(f"Fast image preprocessing failed: {e}")
             return image
     
-    def _extract_tables_from_ocr(self, image: Image.Image, page_number: int) -> List[Dict]:
-        """Extract table structure from OCR using image processing"""
+    def _process_table_data(self, table: List, page_number: int, table_index: int, method: str) -> Dict[str, Any]:
+        """Process table data from pdfplumber"""
         try:
-            # This is a simplified table detection - in production, you might want
-            # to use more sophisticated methods like detecting table lines
+            if not table or len(table) <= 1:
+                return None
             
-            # Get OCR data with bounding boxes
-            ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+            # Clean column names and data - handle duplicates
+            raw_columns = [str(col) if col is not None else f'col_{i}' for i, col in enumerate(table[0])]
+            columns = []
+            col_counts = {}
+            for col in raw_columns:
+                if col in col_counts:
+                    col_counts[col] += 1
+                    columns.append(f"{col}_{col_counts[col]}")
+                else:
+                    col_counts[col] = 0
+                    columns.append(col)
             
-            # Group text by lines (simplified table detection)
-            lines = {}
-            for i, text in enumerate(ocr_data['text']):
-                if text.strip():
-                    # Ensure coordinates are numeric
-                    try:
-                        y_coord = float(ocr_data['top'][i]) if ocr_data['top'][i] != '' else 0.0
-                        x_coord = float(ocr_data['left'][i]) if ocr_data['left'][i] != '' else 0.0
-                        confidence = float(ocr_data['conf'][i]) if ocr_data['conf'][i] != '' else 0.0
-                    except (ValueError, TypeError):
-                        continue  # Skip invalid coordinate data
-                        
-                    line_key = int(y_coord // 20)  # Group by approximate line
-                    
-                    if line_key not in lines:
-                        lines[line_key] = []
-                    
-                    lines[line_key].append({
-                        'text': text.strip(),
-                        'x': x_coord,
-                        'confidence': confidence
-                    })
+            df = pd.DataFrame(table[1:], columns=columns)
+            df = df.fillna('')
             
-            # If we have multiple lines with similar structure, it might be a table
-            if len(lines) > 2:
-                # Sort lines by y-coordinate (line_key is guaranteed to be int)
-                sorted_lines = sorted(lines.items(), key=lambda x: x[0])
-                
-                # Check if lines have similar number of elements (table-like structure)
-                line_lengths = [len(line[1]) for line in sorted_lines]
-                if line_lengths:  # Avoid division by zero
-                    avg_length = sum(line_lengths) / len(line_lengths)
-                    
-                    # If most lines have similar length, treat as table
-                    similar_length_lines = sum(1 for length in line_lengths if abs(length - avg_length) <= 2)
-                    
-                    if similar_length_lines / len(line_lengths) > 0.6:  # 60% of lines have similar length
-                        table_rows = []
-                        for _, line_data in sorted_lines:
-                            # Sort by x-coordinate (x is guaranteed to be float)
-                            sorted_cells = sorted(line_data, key=lambda cell: cell['x'])
-                            row = [cell['text'] for cell in sorted_cells if cell['text'].strip()]
-                            if row:  # Only add non-empty rows
-                                table_rows.append(row)
-                        
-                        if len(table_rows) > 1:
-                            return [{
-                                'content': f"Table extracted from OCR:\n{pd.DataFrame(table_rows[1:], columns=table_rows[0]).to_string()}",
-                                'page_number': page_number,
-                                'extraction_method': 'OCR_table',
-                                'content_type': 'table_ocr'
-                            }]
-            
-            return []
+            return {
+                'data': df.to_dict('records'),
+                'columns': list(df.columns),
+                'html': df.to_html(index=False, classes='table table-striped'),
+                'page_number': page_number,
+                'table_index': table_index,
+                'extraction_method': method,
+                'rows': len(df),
+                'cols': len(df.columns),
+                'context_before': '',
+                'context_after': ''
+            }
             
         except Exception as e:
-            logger.warning(f"OCR table extraction failed: {e}")
-            return []
+            logger.warning(f"Failed to process table data: {e}")
+            return None
     
-    def _get_table_context(self, page, table, page_number: int) -> Tuple[str, str]:
-        """Get text context around a table"""
+    def _process_dataframe_table(self, df: pd.DataFrame, page_number: int, table_index: int, method: str, accuracy: float = None) -> Dict[str, Any]:
+        """Process table data from DataFrame (camelot/tabula)"""
         try:
-            # Get all text from the page
-            page_text = page.extract_text()
+            # Fix duplicate column names
+            if df.columns.duplicated().any():
+                new_columns = []
+                col_counts = {}
+                for col in df.columns:
+                    col_str = str(col)
+                    if col_str in col_counts:
+                        col_counts[col_str] += 1
+                        new_columns.append(f"{col_str}_{col_counts[col_str]}")
+                    else:
+                        col_counts[col_str] = 0
+                        new_columns.append(col_str)
+                df.columns = new_columns
             
-            # This is a simplified context extraction
-            # In a more sophisticated implementation, you would use the table's
-            # position to get text immediately before and after
+            # Replace NaN values with empty strings
+            df = df.fillna('')
             
-            lines = page_text.split('\n')
-            context_before = ""
-            context_after = ""
+            table_data = {
+                'data': df.to_dict('records'),
+                'columns': list(df.columns),
+                'html': df.to_html(index=False, classes='table table-striped'),
+                'page_number': page_number,
+                'table_index': table_index,
+                'extraction_method': method,
+                'rows': len(df),
+                'cols': len(df.columns),
+                'context_before': '',
+                'context_after': ''
+            }
             
-            # Get first few non-empty lines as context before
-            for line in lines[:10]:
-                if line.strip():
-                    context_before += line.strip() + " "
-                    if len(context_before) > 200:
-                        break
+            if accuracy is not None:
+                table_data['accuracy'] = accuracy
             
-            # Get last few non-empty lines as context after
-            for line in lines[-10:]:
-                if line.strip():
-                    context_after += line.strip() + " "
-                    if len(context_after) > 200:
-                        break
-            
-            return context_before.strip(), context_after.strip()
+            return table_data
             
         except Exception as e:
-            logger.warning(f"Failed to get table context: {e}")
-            return "", ""
+            logger.warning(f"Failed to process DataFrame table: {e}")
+            return None
+    
+    def _combine_extraction_results(self, results: Dict[str, Any], basic_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Combine results from different extraction methods"""
+        combined = {
+            'text_chunks': [],
+            'tables': [],
+            'metadata': {
+                'total_pages': basic_info['total_pages'],
+                'has_images': basic_info['has_images'],
+                'has_tables': False,
+                'processing_methods': []
+            }
+        }
+        
+        # Combine text chunks
+        for result_key in ['text', 'ocr']:
+            if result_key in results and 'text_chunks' in results[result_key]:
+                combined['text_chunks'].extend(results[result_key]['text_chunks'])
+                if results[result_key]['text_chunks']:
+                    combined['metadata']['processing_methods'].append(result_key.title())
+        
+        # Combine tables
+        table_methods = []
+        for result_key in ['tables_pdfplumber', 'tables_camelot', 'tables_tabula']:
+            if result_key in results and 'tables' in results[result_key]:
+                combined['tables'].extend(results[result_key]['tables'])
+                if results[result_key]['tables']:
+                    method_name = result_key.replace('tables_', '')
+                    table_methods.append(method_name)
+        
+        if combined['tables']:
+            combined['metadata']['has_tables'] = True
+            combined['metadata']['processing_methods'].extend(table_methods)
+        
+        return combined
+    
+    def _post_process_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Post-process results: deduplicate and add context"""
+        try:
+            # Deduplicate tables
+            results['tables'] = self._deduplicate_tables(results['tables'])
+            
+            # Add table context to text chunks
+            results = self._add_table_context(results)
+            
+            return results
+            
+        except Exception as e:
+            logger.warning(f"Post-processing failed: {e}")
+            return results
     
     def _deduplicate_tables(self, tables: List[Dict]) -> List[Dict]:
-        """Remove duplicate tables from different extraction methods"""
+        """Remove duplicate tables from different extraction methods - optimized"""
         if not tables:
             return []
         
@@ -498,16 +488,15 @@ class PDFProcessor:
         seen_signatures = set()
         
         for table in tables:
-            # Create a signature based on table dimensions and first few cells
+            # Create a fast signature based on table dimensions and first few cell values
             signature = f"{table['rows']}x{table['cols']}"
             
-            if 'data' in table and table['data']:
-                # Add first few cell values to signature
+            if 'data' in table and table['data'] and len(table['data']) > 0:
+                # Add first few cell values to signature (limited for speed)
                 first_row = table['data'][0] if table['data'] else {}
-                # Filter out None values and convert all to strings for comparison
-                values = [str(v) for v in first_row.values() if v is not None]
+                values = [str(v) for v in first_row.values() if v is not None][:3]  # Limit to first 3 values
                 if values:
-                    signature += str(sorted(values)[:3])
+                    signature += str(sorted(values))
             
             if signature not in seen_signatures:
                 seen_signatures.add(signature)
@@ -517,7 +506,7 @@ class PDFProcessor:
         return unique_tables
     
     def _add_table_context(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Add table references to relevant text chunks"""
+        """Add table references to relevant text chunks - optimized"""
         try:
             # For each table, try to associate it with nearby text chunks
             for table in results['tables']:
@@ -547,3 +536,9 @@ class PDFProcessor:
         except Exception as e:
             logger.warning(f"Failed to add table context: {e}")
             return results
+
+# Alias for backward compatibility
+PDFProcessor = OptimizedPDFProcessor
+
+
+

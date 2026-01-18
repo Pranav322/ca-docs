@@ -233,6 +233,137 @@ Instructions:
                 'processing_time': 0
             }
     
+    def _generate_answer_stream(self, question: str, context: str, level: str = None, 
+                                paper: str = None):
+        """Generate answer using Azure OpenAI LLM with streaming"""
+        try:
+            # Prepare system message based on CA context
+            system_message = self._get_system_message(level, paper)
+            
+            # Prepare user message
+            user_message = f"""
+Question: {question}
+
+Context:
+{context}
+
+Instructions:
+1. Answer the question based on the provided context
+2. If the context includes tables, reference specific data points
+3. Provide explanations for financial calculations or formulas
+4. Include references to relevant standards, sections, or regulations
+5. If the answer involves numerical data from tables, be precise
+6. If you cannot answer based on the context, say so clearly
+7. For CA-specific topics, use appropriate terminology and concepts
+8. Structure your answer clearly with headings if needed
+"""
+            
+            # Stream the response
+            stream = self.client.chat.completions.create(
+                model=self.llm_deployment,
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_message}
+                ],
+                max_tokens=2000,
+                temperature=0.3,
+                stream=True  # Enable streaming
+            )
+            
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+                    
+        except Exception as e:
+            logger.error(f"Failed to generate streaming answer: {e}")
+            yield f"Error: {str(e)}"
+    
+    def answer_question_stream(self, question: str, level: str = None, paper: str = None,
+                               module: str = None, chapter: str = None, unit: str = None,
+                               include_tables: bool = True):
+        """
+        Answer a question using RAG pipeline with streaming response
+        Yields: JSON chunks with type 'metadata', 'token', or 'done'
+        """
+        import json
+        
+        try:
+            logger.info(f"Processing streaming question: {question}")
+            
+            # Step 1: Generate query embedding
+            query_embedding = self.embedding_manager.get_query_embedding_with_filters(
+                question, level or '', paper or ''
+            )
+            
+            # Step 2: Retrieve relevant documents
+            document_results = self.vector_db.similarity_search_documents(
+                query_embedding=query_embedding,
+                top_k=self.top_k_documents,
+                level=level,
+                paper=paper,
+                module=module,
+                chapter=chapter,
+                unit=unit
+            )
+            
+            # Step 3: Retrieve relevant tables if requested
+            table_results = []
+            if include_tables:
+                table_results = self.vector_db.similarity_search_tables(
+                    query_embedding=query_embedding,
+                    top_k=self.top_k_tables,
+                    level=level,
+                    paper=paper,
+                    module=module,
+                    chapter=chapter,
+                    unit=unit
+                )
+            
+            # Step 4: Filter by similarity threshold
+            filtered_documents = [
+                doc for doc in document_results 
+                if doc['similarity'] >= self.similarity_threshold
+            ]
+            
+            filtered_tables = [
+                table for table in table_results 
+                if table['similarity'] >= self.similarity_threshold
+            ]
+            
+            # Yield metadata first (sources, confidence)
+            metadata = {
+                'type': 'metadata',
+                'confidence': self._calculate_confidence(filtered_documents, filtered_tables),
+                'sources': {
+                    'documents': [self._format_document_source(doc) for doc in filtered_documents[:3]],
+                    'tables': [self._format_table_source(table) for table in filtered_tables[:2]]
+                },
+                'documents_found': len(filtered_documents),
+                'tables_found': len(filtered_tables)
+            }
+            yield f"data: {json.dumps(metadata)}\n\n"
+            
+            # Handle empty results
+            if not filtered_documents and not filtered_tables:
+                no_result_msg = {"type": "token", "content": "I don't have relevant information about this topic yet."}
+                yield f"data: {json.dumps(no_result_msg)}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                return
+            
+            # Step 5: Prepare context
+            context = self._prepare_context(filtered_documents, filtered_tables)
+            
+            # Step 6: Stream the answer
+            for token in self._generate_answer_stream(question, context, level, paper):
+                yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+            
+            # Signal completion
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
     def _get_system_message(self, level: str = None, paper: str = None) -> str:
         """Get system message based on CA level and paper"""
         base_message = """You are an expert CA (Chartered Accountancy) assistant specializing in helping Indian CA students with their studies. You have deep knowledge of:
