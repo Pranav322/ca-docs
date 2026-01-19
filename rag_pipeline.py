@@ -290,7 +290,11 @@ Instructions:
         try:
             logger.info(f"Processing streaming question: {question}")
             
+            # Status: Analyzing
+            yield f"data: {json.dumps({'type': 'status', 'content': 'Analyzing your question...'})}\n\n"
+            
             # Step 1: Generate query embedding
+            yield f"data: {json.dumps({'type': 'status', 'content': 'Searching knowledge base...'})}\n\n"
             query_embedding = self.embedding_manager.get_query_embedding_with_filters(
                 question, level or '', paper or ''
             )
@@ -320,6 +324,7 @@ Instructions:
                 )
             
             # Step 4: Filter by similarity threshold
+            yield f"data: {json.dumps({'type': 'status', 'content': 'Filtering relevant information...'})}\n\n"
             filtered_documents = [
                 doc for doc in document_results 
                 if doc['similarity'] >= self.similarity_threshold
@@ -351,10 +356,12 @@ Instructions:
                 return
             
             # Step 5: Prepare context
+            yield f"data: {json.dumps({'type': 'status', 'content': 'Synthesizing answer...'})}\n\n"
             context = self._prepare_context(filtered_documents, filtered_tables)
             
             # Step 6: Stream the answer
-            for token in self._generate_answer_stream(question, context, level, paper):
+            yield f"data: {json.dumps({'type': 'status', 'content': 'Finalizing response...'})}\n\n"
+            for token in self._generate_answer_stream(question, context, level, paper, ):
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
             
             # Signal completion
