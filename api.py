@@ -2,7 +2,7 @@
 FastAPI Backend for CA RAG Assistant
 Replaces Streamlit UI with REST API endpoints
 """
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
@@ -108,8 +108,9 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8080",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
+        "https://cask.vercel.app",
+        "https://cask-git-main-pranavs-projects.vercel.app",
+        "https://cask.pranavbuilds.tech"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -132,13 +133,33 @@ async def health_check():
 # ============ Question Answering ============
 
 @app.post("/api/questions/ask", response_model=QuestionResponse, tags=["Questions"])
-async def ask_question(request: QuestionRequest, state: AppState = Depends(get_state)):
+async def ask_question(
+    request: QuestionRequest, 
+    background_tasks: BackgroundTasks,
+    raw_request: Request,
+    state: AppState = Depends(get_state)
+):
     """
     Ask a question about CA study materials.
     Uses RAG pipeline to find relevant documents and generate an answer.
     """
     start_time = time.time()
     
+    # Log question + IP
+    try:
+        # Get real IP (handles Cloudflare/Nginx proxies)
+        client_ip = raw_request.headers.get("cf-connecting-ip")
+        if not client_ip:
+            forwarded = raw_request.headers.get("x-forwarded-for")
+            if forwarded:
+                client_ip = forwarded.split(",")[0].strip()
+            else:
+                client_ip = raw_request.client.host if raw_request.client else "unknown"
+                
+        background_tasks.add_task(state.vector_db.log_question, request.question, client_ip)
+    except Exception as e:
+        logger.error(f"Failed to schedule logging task: {e}")
+
     try:
         # Check cache first
         filters = {
@@ -220,7 +241,12 @@ async def ask_question(request: QuestionRequest, state: AppState = Depends(get_s
 from fastapi.responses import StreamingResponse
 
 @app.post("/api/questions/ask/stream", tags=["Questions"])
-async def ask_question_stream(request: QuestionRequest, state: AppState = Depends(get_state)):
+async def ask_question_stream(
+    request: QuestionRequest, 
+    background_tasks: BackgroundTasks,
+    raw_request: Request,
+    state: AppState = Depends(get_state)
+):
     """
     Ask a question with streaming response.
     Returns Server-Sent Events (SSE) with tokens as they are generated.
@@ -231,6 +257,21 @@ async def ask_question_stream(request: QuestionRequest, state: AppState = Depend
     - done: Signals completion
     - error: Contains error message if something went wrong
     """
+    # Log question + IP
+    try:
+        # Get real IP (handles Cloudflare/Nginx proxies)
+        client_ip = raw_request.headers.get("cf-connecting-ip")
+        if not client_ip:
+            forwarded = raw_request.headers.get("x-forwarded-for")
+            if forwarded:
+                client_ip = forwarded.split(",")[0].strip()
+            else:
+                client_ip = raw_request.client.host if raw_request.client else "unknown"
+                
+        background_tasks.add_task(state.vector_db.log_question, request.question, client_ip)
+    except Exception as e:
+        logger.error(f"Failed to schedule logging task: {e}")
+
     def generate():
         try:
             for chunk in state.rag_pipeline.answer_question_stream(

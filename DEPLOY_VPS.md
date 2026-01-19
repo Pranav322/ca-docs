@@ -42,9 +42,9 @@ cd /opt/cask
 
 ### 2.2 Clone Repository
 ```bash
-# Replace with your actual GitHub repo URL
-git clone https://github.com/YOUR_USERNAME/ca-docs-backend.git backend
-cd backend
+# Clone directly into the ca-docs folder
+git clone https://github.com/Pranav322/ca-docs.git ca-docs
+cd ca-docs
 ```
 
 ### 2.3 Setup Python Environment
@@ -61,27 +61,7 @@ uv sync
 ```bash
 nano .env
 ```
-
-Add your environment variables:
-```env
-# Azure OpenAI Configuration
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
-AZURE_OPENAI_KEY=your_azure_key_here
-AZURE_OPENAI_VERSION=2024-02-01
-AZURE_EMBEDDING_DEPLOYMENT=text-embedding-ada-002
-AZURE_LLM_DEPLOYMENT=gpt-4
-
-# Database (your cloud PostgreSQL URL)
-DATABASE_URL=postgresql://user:password@host:5432/database?sslmode=require
-
-# Appwrite (if using for file storage)
-APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
-APPWRITE_PROJECT_ID=your_project_id
-APPWRITE_API_KEY=your_api_key
-APPWRITE_BUCKET_ID=your_bucket_id
-```
-
-Save with `Ctrl+X`, then `Y`, then `Enter`.
+...
 
 ---
 
@@ -101,9 +81,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/cask/backend
-EnvironmentFile=/opt/cask/backend/.env
-ExecStart=/opt/cask/backend/.venv/bin/uvicorn api:app --host 127.0.0.1 --port 8000 --workers 4 --loop uvloop --http httptools
+WorkingDirectory=/opt/cask/ca-docs
+EnvironmentFile=/opt/cask/ca-docs/.env
+ExecStart=/opt/cask/ca-docs/.venv/bin/uvicorn api:app --host 127.0.0.1 --port 8001 --workers 4 --loop uvloop --http httptools
 Restart=always
 RestartSec=3
 
@@ -137,7 +117,7 @@ server {
     server_name api.yourdomain.com;  # Or use _ for any domain/IP
 
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:8001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -191,7 +171,7 @@ firewall-cmd --reload
 
 ```bash
 # Test locally
-curl http://localhost:8000/api/health
+curl http://localhost:8001/api/health
 
 # Test via nginx
 curl http://YOUR_VPS_IP/api/health
@@ -228,7 +208,7 @@ Then push to GitHub and redeploy on Vercel.
 | `systemctl stop cask` | Stop backend |
 | `journalctl -u cask -f` | View live logs |
 | `journalctl -u cask -n 100` | View last 100 log lines |
-| `curl localhost:8000/api/health` | Test API locally |
+| `curl localhost:8001/api/health` | Test API locally |
 | `nginx -t` | Test nginx config |
 | `systemctl reload nginx` | Reload nginx |
 
@@ -242,10 +222,10 @@ Then push to GitHub and redeploy on Vercel.
 journalctl -u cask -n 50
 
 # Try running manually to see errors
-cd /opt/cask/backend
+cd /opt/cask/ca-docs
 source .venv/bin/activate
 source .env
-uvicorn api:app --host 127.0.0.1 --port 8000
+uvicorn api:app --host 127.0.0.1 --port 8001
 ```
 
 ### 502 Bad Gateway from Nginx
@@ -260,14 +240,14 @@ setsebool -P httpd_can_network_connect 1
 ### Database Connection Issues
 ```bash
 # Test database URL
-cd /opt/cask/backend
+cd /opt/cask/ca-docs
 source .venv/bin/activate
 python -c "from database import VectorDatabase; db = VectorDatabase(); print('Connected!')"
 ```
 
 ### Update Code from GitHub
 ```bash
-cd /opt/cask/backend
+cd /opt/cask/ca-docs
 git pull
 source .venv/bin/activate
 uv sync

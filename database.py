@@ -113,6 +113,16 @@ class OptimizedVectorDatabase:
                 ADD COLUMN IF NOT EXISTS source_file TEXT;
             """)
             
+            # Create question logs table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS question_logs (
+                    id SERIAL PRIMARY KEY,
+                    question TEXT NOT NULL,
+                    ip_address TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
             # Create optimized indexes
             self._create_optimized_indexes(cur)
             
@@ -605,6 +615,36 @@ class OptimizedVectorDatabase:
         except Exception as e:
             logger.error(f"Failed to get database stats: {e}")
             return {}
+
+    def log_question(self, question: str, ip_address: str):
+        """Log user question and IP address"""
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+            
+            cur.execute("""
+                INSERT INTO question_logs (question, ip_address)
+                VALUES (%s, %s);
+            """, (question, ip_address))
+            
+            conn.commit()
+            cur.close()
+            self.pool.putconn(conn)
+            
+            logger.info(f"Logged question from {ip_address}")
+            
+        except Exception as e:
+            logger.error(f"Failed to log question: {e}")
+            # Don't raise, we don't want to fail the request just because logging failed
+
+    async def log_question_async(self, question: str, ip_address: str):
+        """Async wrapper for logging question"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            lambda: self.log_question(question, ip_address)
+        )
+
     
     # ============ Async Wrappers for Better Performance ============
     
