@@ -20,7 +20,7 @@ from pdf_processor import OptimizedPDFProcessor
 from table_processor import TableProcessor
 from embeddings import OptimizedEmbeddingManager
 from rag_pipeline import RAGPipeline
-from appwrite_client import AppwriteClient
+# AppwriteClient import removed
 from utils import FileUtils, ValidationUtils, ProgressTracker, ResponseFormatter
 from config import CA_LEVELS, CA_PAPERS
 from curriculum_ui import CurriculumSelector, render_curriculum_filter, render_smart_curriculum_selector
@@ -54,8 +54,9 @@ def initialize_components():
                 st.session_state.table_processor = TableProcessor()
                 st.session_state.embedding_manager = OptimizedEmbeddingManager(max_concurrent_requests=15)
                 st.session_state.rag_pipeline = RAGPipeline()
-                st.session_state.appwrite_client = AppwriteClient()
+                # AppwriteClient initialization removed
                 st.session_state.initialized = True
+                
                 
                 # Initialize cache stats
                 st.session_state.cache_stats = cache_manager.get_stats()
@@ -262,20 +263,14 @@ def process_single_file_optimized(file_index: int, total_files: int, uploaded_fi
             pdf_results = cached_content
             progress_bar.progress(40)
         else:
-            # Step 1: Upload to Appwrite
-            status_text.text("📤 Uploading file to storage...")
-            progress_bar.progress(10)
-
-            appwrite_file_id = st.session_state.appwrite_client.upload_file(tmp_file_path, uploaded_file.name)
-
-            # Step 2: Store metadata
+            # Step 1: Store metadata (Skip Appwrite upload)
             status_text.text("💾 Storing file metadata...")
             progress_bar.progress(20)
 
             st.session_state.vector_db.store_file_metadata(
                 file_id=file_id,
                 file_name=sanitized_filename,
-                appwrite_file_id=appwrite_file_id,
+                file_path=tmp_file_path,  # Use temp path
                 level=validated_metadata['level'],
                 paper=validated_metadata['paper'],
                 module=validated_metadata.get('module'),
@@ -297,7 +292,7 @@ def process_single_file_optimized(file_index: int, total_files: int, uploaded_fi
             st.session_state.vector_db.store_file_metadata(
                 file_id=file_id,
                 file_name=sanitized_filename,
-                appwrite_file_id=appwrite_file_id,
+                file_path=tmp_file_path,
                 level=validated_metadata['level'],
                 paper=validated_metadata['paper'],
                 module=validated_metadata.get('module'),

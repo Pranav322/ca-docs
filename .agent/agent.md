@@ -1,0 +1,1 @@
+i later want to show users a fancy graph in frontend for each module or so on pease remind me while building frontend 

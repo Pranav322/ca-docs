@@ -1,12 +1,3 @@
-#!/usr/bin/env python3
-"""
-Automated CA PDF Batch Ingestion Script
-
-This script automatically processes all PDF files in the ca/ folder,
-infers curriculum metadata from folder structure, and processes them
-through the full RAG pipeline with parallel processing and retries.
-"""
-
 import os
 import asyncio
 import uuid
@@ -14,6 +5,7 @@ import tempfile
 import shutil
 import logging
 import time
+import re
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import concurrent.futures
@@ -21,13 +13,13 @@ from dataclasses import dataclass
 from enum import Enum
 from threading import Lock
 
-# Import existing components
+# Import existing components (config.py now contains the DNS patch)
 from database import VectorDatabase
 from pdf_processor import PDFProcessor
 from embeddings import EmbeddingManager
-from appwrite_client import AppwriteClient
 from utils import FileUtils, ValidationUtils
 from config import CHUNK_SIZE, CHUNK_OVERLAP
+from classifier import ContentClassifier, generate_node_id, ContentType
 
 # Set up logging
 logging.basicConfig(
@@ -83,9 +75,9 @@ class BatchIngestor:
         logger.info("=== Initializing EmbeddingManager ===")
         self.embedding_manager = EmbeddingManager()
         logger.info("=== EmbeddingManager initialized ===")
-        logger.info("=== Initializing AppwriteClient ===")
-        self.appwrite_client = AppwriteClient()
-        logger.info("=== AppwriteClient initialized ===")
+        logger.info("=== Initializing ContentClassifier ===")
+        self.classifier = ContentClassifier(use_llm_fallback=False)  # Smart regex only - 10x faster!
+        logger.info("=== ContentClassifier initialized ===")
         
         # Processing stats
         self.stats = {
@@ -105,14 +97,11 @@ class BatchIngestor:
         self.last_progress_update = 0
         
         logger.info(f"Batch Ingestor initialized with {max_workers} workers, max {retry_attempts} retries")
-
+    
     def _update_progress(self) -> None:
-        """
-        Update and display progress information (thread-safe)
-        """
+        """Update and display progress information (thread-safe)"""
         with self.progress_lock:
             current_time = time.time()
-            # Update progress every 30 seconds or on significant events
             if current_time - self.last_progress_update < 30 and self.stats['completed'] + self.stats['failed'] < self.stats['total_files']:
                 return
                 
@@ -125,7 +114,6 @@ class BatchIngestor:
                 progress_pct = ((completed + failed) / total) * 100
                 elapsed_time = current_time - self.stats['start_time']
                 
-                # Calculate ETA
                 if completed > 0:
                     avg_time_per_file = elapsed_time / (completed + failed)
                     eta_seconds = avg_time_per_file * remaining
@@ -135,31 +123,11 @@ class BatchIngestor:
                     eta_display = "calculating..."
                 
                 logger.info(f"📊 PROGRESS: {completed}/{total} completed ({progress_pct:.1f}%) | {failed} failed | {remaining} remaining | ETA: {eta_display}")
-                
-                # Show recent completions
-                if hasattr(self, '_recent_completions'):
-                    recent = self._recent_completions[-3:]  # Show last 3
-                    if recent:
-                        logger.info(f"✅ Recently completed: {', '.join(recent)}")
-                        
+            
             self.last_progress_update = current_time
-
-    def _add_recent_completion(self, filename: str) -> None:
-        """
-        Track recent completions for progress display
-        """
-        if not hasattr(self, '_recent_completions'):
-            self._recent_completions = []
-        
-        self._recent_completions.append(filename)
-        # Keep only last 10
-        if len(self._recent_completions) > 10:
-            self._recent_completions = self._recent_completions[-10:]
-
+    
     def discover_files(self) -> List[FileTask]:
-        """
-        Discover all PDF files in ca folder and create tasks with inferred metadata
-        """
+        """Discover all PDF files in ca folder and create tasks with inferred metadata"""
         logger.info(f"Discovering PDF files in {self.ca_folder_path}")
         
         if not self.ca_folder_path.exists():
@@ -167,22 +135,17 @@ class BatchIngestor:
         
         tasks = []
         
-        # Walk through all subdirectories
         for pdf_file in self.ca_folder_path.rglob("*.pdf"):
             try:
-                # Get relative path from ca folder
                 rel_path = pdf_file.relative_to(self.ca_folder_path)
                 path_parts = rel_path.parts
                 
-                # Infer metadata from folder structure (same as ca/path.py)
                 metadata = self._build_metadata(path_parts, str(rel_path))
                 
-                # Validate metadata
                 if not self._validate_metadata(metadata):
                     logger.warning(f"Skipping {pdf_file} - invalid metadata: {metadata}")
                     continue
                 
-                # Create task
                 file_id = str(uuid.uuid4())
                 task = FileTask(
                     file_path=str(pdf_file),
@@ -203,219 +166,170 @@ class BatchIngestor:
         return tasks
 
     def _build_metadata(self, path_parts: tuple, file_path: str) -> Dict[str, Any]:
-        """
-        Build metadata from path parts (same logic as ca/path.py)
-        """
-        def normalize(name):
-            return name.strip().replace(" .", ".").replace("..", ".").replace("  ", " ")
-        
-        meta = {
-            "level": None,
-            "paper": None, 
-            "module": None,
-            "chapter": None,
-            "unit": None,
-            "source_file": file_path,
-            "file_name": path_parts[-1] if path_parts else "unknown.pdf"
+        """Build metadata from path parts"""
+        metadata = {
+            'level': None,
+            'paper': None,
+            'module': None,
+            'chapter': None,
+            'unit': None,
+            'source_file': file_path,
+            'source_type': 'ICAI_Module',
+            'applicable_attempts': ['May_2026']
         }
         
-        # Extract hierarchy from path
-        if len(path_parts) >= 1:
-            meta["level"] = normalize(path_parts[0])
-        if len(path_parts) >= 2:
-            meta["paper"] = normalize(path_parts[1])
-        if len(path_parts) >= 3 and path_parts[2].lower().startswith("module"):
-            meta["module"] = normalize(path_parts[2])
-        if len(path_parts) >= 4 and path_parts[3].lower().startswith("chapter"):
-            meta["chapter"] = normalize(path_parts[3])
+        for part in path_parts:
+            part_lower = part.lower()
+            
+            if 'foundation' in part_lower:
+                metadata['level'] = 'Foundation'
+            elif 'intermediate' in part_lower:
+                metadata['level'] = 'Intermediate'
+            elif 'final' in part_lower:
+                metadata['level'] = 'Final'
+            
+            if 'paper' in part_lower:
+                metadata['paper'] = part
+            
+            if 'module' in part_lower:
+                metadata['module'] = part
+            
+            if 'chapter' in part_lower:
+                metadata['chapter'] = part
+            
+            if 'unit' in part_lower:
+                metadata['unit'] = part
         
-        # Check filename for unit/chapter info
-        filename = path_parts[-1]
-        if filename.lower().startswith("unit"):
-            meta["unit"] = normalize(filename.replace(".pdf", ""))
-        elif filename.lower().startswith("chapter"):
-            meta["chapter"] = normalize(filename.replace(".pdf", ""))
+        # Generate stable node_id
+        metadata['node_id'] = generate_node_id(file_path)
         
-        return meta
+        return metadata
 
     def _validate_metadata(self, metadata: Dict[str, Any]) -> bool:
-        """
-        Validate that metadata has minimum required fields
-        """
-        required_fields = ['level', 'paper']
-        
-        for field in required_fields:
-            if not metadata.get(field):
-                return False
-        
-        # Validate CA level
-        valid_levels = ['Foundation', 'Intermediate', 'Final']
-        if metadata['level'] not in valid_levels:
-            # Try to match case-insensitive
-            for level in valid_levels:
-                if metadata['level'].lower() == level.lower():
-                    metadata['level'] = level
-                    break
-            else:
-                return False
-        
-        return True
+        """Validate that required metadata fields are present"""
+        return metadata.get('level') is not None and metadata.get('paper') is not None
 
     def check_existing_files(self, tasks: List[FileTask]) -> List[FileTask]:
-        """
-        Filter out files that are already processed successfully
-        """
-        logger.info("Checking for already processed files...")
+        """Filter out already processed files"""
+        existing_files = self.vector_db.get_file_metadata()
         
-        try:
-            existing_files = self.vector_db.get_file_metadata()
-            existing_paths = {f['source_file'] for f in existing_files if f['processing_status'] == 'completed'}
-            
-            new_tasks = []
-            for task in tasks:
-                rel_path = str(Path(task.file_path).relative_to(self.ca_folder_path))
-                if rel_path in existing_paths:
-                    logger.info(f"Skipping already processed file: {task.file_name}")
-                    self.completed_files.add(task.file_id)
-                else:
-                    new_tasks.append(task)
-            
-            logger.info(f"Found {len(existing_paths)} already processed, {len(new_tasks)} new files to process")
-            return new_tasks
-            
-        except Exception as e:
-            logger.warning(f"Could not check existing files: {e}. Processing all files.")
-            return tasks
+        completed_paths = set()
+        for file_meta in existing_files:
+            if file_meta.get('processing_status') == 'completed':
+                source = file_meta.get('source_file', '')
+                if source:
+                    completed_paths.add(source)
+        
+        pending_tasks = []
+        for task in tasks:
+            source_file = task.metadata.get('source_file', '')
+            if source_file not in completed_paths:
+                pending_tasks.append(task)
+            else:
+                logger.debug(f"Skipping already processed: {task.file_name}")
+        
+        skipped = len(tasks) - len(pending_tasks)
+        if skipped > 0:
+            logger.info(f"Skipped {skipped} already processed files")
+        
+        return pending_tasks
 
     async def process_batch(self, tasks: List[FileTask]) -> None:
-        """
-        Process all tasks with parallel workers and retry logic
-        """
-        if not tasks:
-            logger.info("No files to process")
-            return
-        
+        """Process all tasks with concurrency control"""
         self.tasks = tasks
         self.stats['total_files'] = len(tasks)
         self.stats['start_time'] = time.time()
         
         logger.info(f"🚀 Starting batch processing of {len(tasks)} files with {self.max_workers} workers")
-        logger.info(f"📋 Processing plan: {len(tasks)} files total")
-        self._update_progress()  # Show initial progress
         
-        # Create semaphore to limit concurrent processing
         semaphore = asyncio.Semaphore(self.max_workers)
         
-        # Process all tasks concurrently with proper cancellation handling
-        try:
-            # Use gather to process all tasks concurrently
-            await asyncio.gather(*[self._process_with_retry(task, semaphore) for task in tasks])
-        except KeyboardInterrupt:
-            logger.info("Processing interrupted by user")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error during batch processing: {e}")
-            raise
+        async def process_with_semaphore(task: FileTask):
+            async with semaphore:
+                await self._process_task(task)
+        
+        await asyncio.gather(*[process_with_semaphore(task) for task in tasks])
         
         self.stats['end_time'] = time.time()
         self._print_final_stats()
 
-    async def _process_with_retry(self, task: FileTask, semaphore: asyncio.Semaphore) -> None:
-        """
-        Process a single task with retry logic
-        """
-        async with semaphore:  # Limit concurrent processing
-            while task.attempt < task.max_attempts and task.status != ProcessingStatus.COMPLETED:
-                task.attempt += 1
+    async def _process_task(self, task: FileTask) -> None:
+        """Process a single task with retry logic"""
+        while task.attempt < task.max_attempts:
+            task.attempt += 1
+            task.status = ProcessingStatus.PROCESSING
+            
+            start_time = time.time()
+            
+            try:
+                logger.info(f"Processing [{task.attempt}/{task.max_attempts}]: {task.file_name}")
+                await self._process_single_file(task)
                 
-                if task.attempt > 1:
-                    task.status = ProcessingStatus.RETRYING
-                    self.stats['retries'] += 1
-                    wait_time = 2 ** (task.attempt - 1)  # Exponential backoff
-                    logger.info(f"Retrying {task.file_name} (attempt {task.attempt}/{task.max_attempts}) after {wait_time}s delay")
-                    await asyncio.sleep(wait_time)
-                else:
-                    task.status = ProcessingStatus.PROCESSING
-                    logger.info(f"Processing {task.file_name} (attempt {task.attempt}/{task.max_attempts})")
+                task.status = ProcessingStatus.COMPLETED
+                task.processing_time = time.time() - start_time
                 
-                try:
-                    start_time = time.time()
-                    await self._process_single_file(task)
-                    task.processing_time = time.time() - start_time
-                    task.status = ProcessingStatus.COMPLETED
-                    self.completed_files.add(task.file_id)
+                with self.progress_lock:
                     self.stats['completed'] += 1
-                    self._add_recent_completion(task.file_name)
-                    
-                    logger.info(f"✅ Completed {task.file_name} in {task.processing_time:.1f}s")
-                    self._update_progress()  # Update progress after each completion
-                    break
-                    
-                except Exception as e:
-                    task.error = str(e)
-                    logger.error(f"❌ Failed {task.file_name} (attempt {task.attempt}): {e}")
-                    
-                    if task.attempt >= task.max_attempts:
-                        task.status = ProcessingStatus.FAILED
-                        self.failed_files.add(task.file_id)
+                    self.completed_files.add(task.file_id)
+                
+                self._update_progress()
+                return
+                
+            except Exception as e:
+                task.error = str(e)
+                logger.error(f"Error processing {task.file_name} (attempt {task.attempt}): {e}")
+                
+                if task.attempt < task.max_attempts:
+                    task.status = ProcessingStatus.RETRYING
+                    with self.progress_lock:
+                        self.stats['retries'] += 1
+                    await asyncio.sleep(2 ** task.attempt)
+                else:
+                    task.status = ProcessingStatus.FAILED
+                    with self.progress_lock:
                         self.stats['failed'] += 1
-                        logger.error(f"🚫 Permanently failed {task.file_name} after {task.max_attempts} attempts")
-                        self._update_progress()  # Update progress after failure
+                        self.failed_files.add(task.file_id)
 
     async def _process_single_file(self, task: FileTask) -> None:
-        """
-        Process a single PDF file through the complete pipeline
-        """
+        """Process a single PDF file through the complete pipeline"""
         temp_file_path = None
         
         try:
-            # Step 1: Validate file
             if not FileUtils.validate_pdf_file(task.file_path):
                 raise Exception(f"Invalid PDF file: {task.file_path}")
             
-            # Step 2: Create temporary copy for processing
             temp_file_path = await self._create_temp_copy(task.file_path)
             
-            # Step 3: Upload to Appwrite storage
-            appwrite_file_id = await self._upload_to_appwrite(temp_file_path, task.file_name)
-            
-            # Step 4: Extract PDF content (text and tables)
             pdf_results = await self._extract_pdf_content(temp_file_path)
             
-            # Step 5: Generate embeddings for text chunks and tables
-            processed_chunks, processed_tables = await self._generate_embeddings(
+            # Classify chunks using hybrid classifier
+            classified_chunks = await self._classify_and_generate_embeddings(
                 pdf_results, task.metadata
             )
             
-            # Step 6: Store everything in vector database
             await self._store_in_database(
                 task.file_id,
                 task.file_name,
-                appwrite_file_id,
-                processed_chunks,
-                processed_tables,
+                task.metadata.get('source_file', task.file_path),
+                classified_chunks['processed_chunks'],
+                classified_chunks['processed_tables'],
                 task.metadata,
                 pdf_results.get('metadata', {})
             )
 
-            # Mark file as completed
             self.vector_db.update_processing_status(task.file_id, 'completed')
 
-            logger.info(f"Successfully processed {task.file_name}: {len(processed_chunks)} chunks, {len(processed_tables)} tables")
+            logger.info(f"Successfully processed {task.file_name}: {len(classified_chunks['processed_chunks'])} chunks, {len(classified_chunks['processed_tables'])} tables")
             
         finally:
-            # Cleanup temp file
             if temp_file_path and os.path.exists(temp_file_path):
                 FileUtils.cleanup_temp_file(temp_file_path)
 
     async def _create_temp_copy(self, source_path: str) -> str:
-        """
-        Create temporary copy of PDF file for processing
-        """
+        """Create temporary copy of PDF file for processing"""
         loop = asyncio.get_event_loop()
 
         def _copy_file():
-            # Use a custom temp directory with more space instead of /tmp
             temp_dir = os.path.join(os.getcwd(), 'temp_processing')
             os.makedirs(temp_dir, exist_ok=True)
 
@@ -427,22 +341,8 @@ class BatchIngestor:
 
         return await loop.run_in_executor(None, _copy_file)
 
-    async def _upload_to_appwrite(self, file_path: str, file_name: str) -> str:
-        """
-        Upload file to Appwrite storage
-        """
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            self.appwrite_client.upload_file,
-            file_path,
-            file_name
-        )
-
     async def _extract_pdf_content(self, file_path: str) -> Dict[str, Any]:
-        """
-        Extract text and tables from PDF
-        """
+        """Extract text and tables from PDF"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None,
@@ -450,24 +350,37 @@ class BatchIngestor:
             file_path
         )
 
-    async def _generate_embeddings(self, pdf_results: Dict, metadata: Dict) -> tuple:
-        """
-        Generate embeddings for text chunks and tables
-        """
+    async def _classify_and_generate_embeddings(self, pdf_results: Dict, metadata: Dict) -> Dict:
+        """Classify content types and generate embeddings"""
         loop = asyncio.get_event_loop()
         
-        # Process text chunks
         processed_chunks = []
-        if pdf_results.get('text_chunks'):
-            processed_chunks = await loop.run_in_executor(
-                None,
-                self.embedding_manager.process_document_chunks,
-                pdf_results['text_chunks'],
-                metadata
-            )
-        
-        # Process tables
         processed_tables = []
+        
+        # Process text chunks with classification
+        if pdf_results.get('text_chunks'):
+            chunks = pdf_results['text_chunks']
+            
+            # Classify each chunk
+            for chunk in chunks:
+                content = chunk.get('content', chunk) if isinstance(chunk, dict) else chunk
+                content_type = self.classifier.classify(content)
+                
+                # Get embedding via azure_embeddings inner object
+                embedding = await loop.run_in_executor(
+                    None,
+                    self.embedding_manager.azure_embeddings.get_embedding,
+                    content
+                )
+                
+                processed_chunks.append({
+                    'content': content,
+                    'embedding': embedding,
+                    'content_type': content_type.value,
+                    'metadata': chunk.get('metadata', {}) if isinstance(chunk, dict) else {}
+                })
+        
+        # Process tables (pre-classified as TABLE)
         if pdf_results.get('tables'):
             processed_tables = await loop.run_in_executor(
                 None,
@@ -476,35 +389,48 @@ class BatchIngestor:
                 metadata
             )
         
-        return processed_chunks, processed_tables
+        return {
+            'processed_chunks': processed_chunks,
+            'processed_tables': processed_tables
+        }
 
-    async def _store_in_database(self, file_id: str, file_name: str, appwrite_file_id: str,
+    async def _store_in_database(self, file_id: str, file_name: str, file_path: str,
                                 processed_chunks: List[Dict], processed_tables: List[Dict],
                                 metadata: Dict, pdf_metadata: Dict) -> None:
-        """
-        Store all processed data in vector database
-        """
+        """Store all processed data in vector database"""
         loop = asyncio.get_event_loop()
         
         # Store file metadata
         await loop.run_in_executor(
             None,
             self.vector_db.store_file_metadata,
-            file_id, file_name, appwrite_file_id,
+            file_id, file_name, file_path,
             metadata['level'], metadata['paper'],
             metadata.get('module'), metadata.get('chapter'), metadata.get('unit'),
-            pdf_metadata.get('total_pages', 0), metadata.get('source_file')
+            pdf_metadata.get('total_pages', 0)
         )
         
-        # Store document chunks
+        # Store document chunks with new fields
         for i, chunk in enumerate(processed_chunks):
             await loop.run_in_executor(
                 None,
-                self.vector_db.store_document_chunk,
-                file_id, file_name, chunk['content'], chunk['embedding'],
-                chunk['metadata'], i,
-                metadata['level'], metadata['paper'],
-                metadata.get('module'), metadata.get('chapter'), metadata.get('unit')
+                lambda c=chunk, idx=i: self.vector_db.store_document_chunks_batch([{
+                    'file_id': file_id,
+                    'file_name': file_name,
+                    'content': c['content'],
+                    'embedding': c['embedding'],
+                    'metadata': c.get('metadata', {}),
+                    'chunk_index': idx,
+                    'level': metadata['level'],
+                    'paper': metadata['paper'],
+                    'module': metadata.get('module'),
+                    'chapter': metadata.get('chapter'),
+                    'unit': metadata.get('unit'),
+                    'content_type': c.get('content_type', 'text'),
+                    'source_type': metadata.get('source_type', 'ICAI_Module'),
+                    'applicable_attempts': metadata.get('applicable_attempts', ['May_2026']),
+                    'node_id': metadata.get('node_id')
+                }])
             )
         
         # Store tables
@@ -520,9 +446,7 @@ class BatchIngestor:
             )
 
     def _print_final_stats(self) -> None:
-        """
-        Print final processing statistics
-        """
+        """Print final processing statistics"""
         total_time = self.stats['end_time'] - self.stats['start_time']
         total_hours = total_time / 3600
 
@@ -548,13 +472,10 @@ class BatchIngestor:
         logger.info(f"🎯 Success rate: {success_rate:.1f}%")
         logger.info("🏆 " + "="*58)
 
-        # Cleanup temp processing directory
         self._cleanup_temp_processing_dir()
 
     def _cleanup_temp_processing_dir(self) -> None:
-        """
-        Clean up the temp_processing directory after batch processing
-        """
+        """Clean up the temp_processing directory after batch processing"""
         try:
             temp_dir = os.path.join(os.getcwd(), 'temp_processing')
             if os.path.exists(temp_dir):
@@ -564,9 +485,7 @@ class BatchIngestor:
             logger.warning(f"Failed to cleanup temp processing directory: {e}")
 
 async def main():
-    """
-    Main entry point for batch ingestion
-    """
+    """Main entry point for batch ingestion"""
     import argparse
     
     parser = argparse.ArgumentParser(description='Batch ingest CA PDFs from folder structure')
@@ -578,21 +497,18 @@ async def main():
     args = parser.parse_args()
     
     try:
-        # Initialize batch ingestor
         ingestor = BatchIngestor(
             ca_folder_path=args.ca_folder,
             max_workers=args.workers,
             retry_attempts=args.retries
         )
         
-        # Discover files
         tasks = ingestor.discover_files()
         
         if not tasks:
             logger.info("No PDF files found to process")
             return
         
-        # Filter already processed files (unless --force)
         if not args.force:
             tasks = ingestor.check_existing_files(tasks)
         
@@ -600,7 +516,6 @@ async def main():
             logger.info("All files already processed. Use --force to reprocess.")
             return
         
-        # Process all files
         await ingestor.process_batch(tasks)
         
     except KeyboardInterrupt:

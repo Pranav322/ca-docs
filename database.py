@@ -45,6 +45,18 @@ class OptimizedVectorDatabase:
             # Enable pgvector extension
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
             
+            # Create curriculum_nodes table (replaces Neo4j graph)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS curriculum_nodes (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL CHECK (type IN ('level', 'paper', 'module', 'chapter', 'unit')),
+                    name TEXT NOT NULL,
+                    parent_id TEXT REFERENCES curriculum_nodes(id) ON DELETE SET NULL,
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
             # Create documents table with optimized structure
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
@@ -61,6 +73,9 @@ class OptimizedVectorDatabase:
                     chapter TEXT,
                     unit TEXT,
                     content_type TEXT DEFAULT 'text',
+                    source_type TEXT DEFAULT 'ICAI_Module',
+                    applicable_attempts TEXT[] DEFAULT ARRAY['May_2026']::TEXT[],
+                    node_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
@@ -107,10 +122,24 @@ class OptimizedVectorDatabase:
                 );
             """)
             
-            # Add source_file column if it doesn't exist
+            # Add new columns if they don't exist (for existing databases)
             cur.execute("""
                 ALTER TABLE file_metadata 
                 ADD COLUMN IF NOT EXISTS source_file TEXT;
+            """)
+            
+            # Add new columns to documents table if they don't exist
+            cur.execute("""
+                ALTER TABLE documents 
+                ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'ICAI_Module';
+            """)
+            cur.execute("""
+                ALTER TABLE documents 
+                ADD COLUMN IF NOT EXISTS applicable_attempts TEXT[] DEFAULT ARRAY['May_2026']::TEXT[];
+            """)
+            cur.execute("""
+                ALTER TABLE documents 
+                ADD COLUMN IF NOT EXISTS node_id TEXT;
             """)
             
             # Create question logs table
@@ -159,6 +188,18 @@ class OptimizedVectorDatabase:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_file_metadata_status ON file_metadata(processing_status);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);")
             
+            # NEW: Content classification indexes
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_content_type ON documents(content_type);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_source_type ON documents(source_type);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_node_id ON documents(node_id);")
+            
+            # NEW: Curriculum nodes indexes
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_curriculum_nodes_parent ON curriculum_nodes(parent_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_curriculum_nodes_type ON curriculum_nodes(type);")
+            
+            # NEW: GIN index for applicable_attempts array
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_applicable_attempts ON documents USING gin(applicable_attempts);")
+            
             logger.info("Optimized indexes created successfully")
             
         except Exception as e:
@@ -183,8 +224,9 @@ class OptimizedVectorDatabase:
                 for i, chunk in enumerate(chunks_data):
                     cur.execute("""
                         INSERT INTO documents (file_id, file_name, content, embedding, metadata, 
-                                             chunk_index, level, paper, module, chapter, unit, content_type)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                             chunk_index, level, paper, module, chapter, unit, 
+                                             content_type, source_type, applicable_attempts, node_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id;
                     """, (
                         chunk['file_id'],
@@ -198,7 +240,10 @@ class OptimizedVectorDatabase:
                         chunk.get('module', ''),
                         chunk.get('chapter', ''),
                         chunk.get('unit', ''),
-                        chunk.get('content_type', 'text')
+                        chunk.get('content_type', 'text'),
+                        chunk.get('source_type', 'ICAI_Module'),
+                        chunk.get('applicable_attempts', ['May_2026']),
+                        chunk.get('node_id')
                     ))
                     
                     result = cur.fetchone()
@@ -343,21 +388,20 @@ class OptimizedVectorDatabase:
         ids = self.store_tables_batch(tables_data)
         return ids[0] if ids else None
     
-    def store_file_metadata(self, file_id: str, file_name: str, appwrite_file_id: str,
+    def store_file_metadata(self, file_id: str, file_name: str, file_path: str,
                            level: str, paper: str, module: str = None, chapter: str = None,
-                           unit: str = None, total_pages: int = 0, source_file: str = None) -> int:
+                           unit: str = None, total_pages: int = 0) -> int:
         """Store file metadata with upsert"""
         try:
             conn = self.get_connection()
             cur = conn.cursor()
             
             cur.execute("""
-                INSERT INTO file_metadata (file_id, file_name, appwrite_file_id, source_file, level, paper,
+                INSERT INTO file_metadata (file_id, file_name, source_file, level, paper,
                                          module, chapter, unit, total_pages)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (file_id) DO UPDATE SET
                     file_name = EXCLUDED.file_name,
-                    appwrite_file_id = EXCLUDED.appwrite_file_id,
                     source_file = EXCLUDED.source_file,
                     level = EXCLUDED.level,
                     paper = EXCLUDED.paper,
@@ -366,7 +410,7 @@ class OptimizedVectorDatabase:
                     unit = EXCLUDED.unit,
                     total_pages = EXCLUDED.total_pages
                 RETURNING id;
-            """, (file_id, file_name, appwrite_file_id, source_file or '', level, paper, 
+            """, (file_id, file_name, file_path, level, paper, 
                   module or '', chapter or '', unit or '', total_pages))
             
             result = cur.fetchone()
