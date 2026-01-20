@@ -4,6 +4,12 @@ Replaces Streamlit UI with REST API endpoints
 """
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 import logging
@@ -35,6 +41,37 @@ from cache_manager import cache_manager, search_cache, file_cache
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============ Security & Rate Limiting ============
+
+def get_real_ip(request: Request):
+    """Get real IP from Cloudflare/Proxy headers"""
+    client_ip = request.headers.get("cf-connecting-ip")
+    if not client_ip:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client else "127.0.0.1"
+    return client_ip
+
+limiter = Limiter(key_func=get_real_ip)
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+def rate_limit_custom_handler(request: Request, exc: RateLimitExceeded):
+    """Custom handler for rate limit exceeded"""
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "We are having limited server capacity so can't offer much of free services, but if everything works good then i can make free again"}
+    )
 
 
 # ============ Application State ============
@@ -101,6 +138,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Initialize Limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_custom_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# Add Security Headers
+app.add_middleware(SecurityHeadersMiddleware)
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -133,10 +178,11 @@ async def health_check():
 # ============ Question Answering ============
 
 @app.post("/api/questions/ask", response_model=QuestionResponse, tags=["Questions"])
+@limiter.limit("5/day")
 async def ask_question(
-    request: QuestionRequest, 
+    question_data: QuestionRequest, 
     background_tasks: BackgroundTasks,
-    raw_request: Request,
+    request: Request,
     state: AppState = Depends(get_state)
 ):
     """
@@ -148,48 +194,48 @@ async def ask_question(
     # Log question + IP
     try:
         # Get real IP (handles Cloudflare/Nginx proxies)
-        client_ip = raw_request.headers.get("cf-connecting-ip")
+        client_ip = request.headers.get("cf-connecting-ip")
         if not client_ip:
-            forwarded = raw_request.headers.get("x-forwarded-for")
+            forwarded = request.headers.get("x-forwarded-for")
             if forwarded:
                 client_ip = forwarded.split(",")[0].strip()
             else:
-                client_ip = raw_request.client.host if raw_request.client else "unknown"
+                client_ip = request.client.host if request.client else "unknown"
                 
-        background_tasks.add_task(state.vector_db.log_question, request.question, client_ip)
+        background_tasks.add_task(state.vector_db.log_question, question_data.question, client_ip)
     except Exception as e:
         logger.error(f"Failed to schedule logging task: {e}")
 
     try:
         # Check cache first
         filters = {
-            'level': request.level,
-            'paper': request.paper,
-            'module': request.module,
-            'chapter': request.chapter,
-            'unit': request.unit
+            'level': question_data.level,
+            'paper': question_data.paper,
+            'module': question_data.module,
+            'chapter': question_data.chapter,
+            'unit': question_data.unit
         }
         
-        search_type = 'documents' if request.include_tables else 'documents_only'
-        cached_result = search_cache.get_search_result(request.question, filters, search_type)
+        search_type = 'documents' if question_data.include_tables else 'documents_only'
+        cached_result = search_cache.get_search_result(question_data.question, filters, search_type)
         
         if cached_result:
-            logger.info(f"Cache hit for question: {request.question[:50]}...")
+            logger.info(f"Cache hit for question: {question_data.question[:50]}...")
             answer_data = cached_result
         else:
             # Get answer from RAG pipeline
             answer_data = state.rag_pipeline.answer_question(
-                question=request.question,
-                level=request.level,
-                paper=request.paper,
-                module=request.module,
-                chapter=request.chapter,
-                unit=request.unit,
-                include_tables=request.include_tables
+                question=question_data.question,
+                level=question_data.level,
+                paper=question_data.paper,
+                module=question_data.module,
+                chapter=question_data.chapter,
+                unit=question_data.unit,
+                include_tables=question_data.include_tables
             )
             
             # Cache the results
-            search_cache.set_search_result(request.question, filters, answer_data, search_type)
+            search_cache.set_search_result(question_data.question, filters, answer_data, search_type)
         
         processing_time = (time.time() - start_time) * 1000
         
@@ -241,10 +287,11 @@ async def ask_question(
 from fastapi.responses import StreamingResponse
 
 @app.post("/api/questions/ask/stream", tags=["Questions"])
+@limiter.limit("5/day")
 async def ask_question_stream(
-    request: QuestionRequest, 
+    question_data: QuestionRequest, 
     background_tasks: BackgroundTasks,
-    raw_request: Request,
+    request: Request,
     state: AppState = Depends(get_state)
 ):
     """
@@ -260,28 +307,28 @@ async def ask_question_stream(
     # Log question + IP
     try:
         # Get real IP (handles Cloudflare/Nginx proxies)
-        client_ip = raw_request.headers.get("cf-connecting-ip")
+        client_ip = request.headers.get("cf-connecting-ip")
         if not client_ip:
-            forwarded = raw_request.headers.get("x-forwarded-for")
+            forwarded = request.headers.get("x-forwarded-for")
             if forwarded:
                 client_ip = forwarded.split(",")[0].strip()
             else:
-                client_ip = raw_request.client.host if raw_request.client else "unknown"
+                client_ip = request.client.host if request.client else "unknown"
                 
-        background_tasks.add_task(state.vector_db.log_question, request.question, client_ip)
+        background_tasks.add_task(state.vector_db.log_question, question_data.question, client_ip)
     except Exception as e:
         logger.error(f"Failed to schedule logging task: {e}")
 
     def generate():
         try:
             for chunk in state.rag_pipeline.answer_question_stream(
-                question=request.question,
-                level=request.level,
-                paper=request.paper,
-                module=request.module,
-                chapter=request.chapter,
-                unit=request.unit,
-                include_tables=request.include_tables
+                question=question_data.question,
+                level=question_data.level,
+                paper=question_data.paper,
+                module=question_data.module,
+                chapter=question_data.chapter,
+                unit=question_data.unit,
+                include_tables=question_data.include_tables
             ):
                 yield chunk
         except Exception as e:
