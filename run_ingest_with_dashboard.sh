@@ -21,7 +21,7 @@ echo "📥 Starting Batch Ingestion with 16 workers..."
 echo "   Log file: batch_ingest.log"
 echo ""
 
-uv run python batch_ingest.py --ca-folder ca --workers 16 2>&1 | tee -a batch_ingest.log
+uv run python -u batch_ingest.py --ca-folder ca --workers 16 2>&1 | tee -a batch_ingest.log
 
 # When done, stop dashboard
 echo ""

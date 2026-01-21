@@ -76,6 +76,7 @@ async def dashboard():
         .stat-card.success .value { color: #00ff88; }
         .stat-card.error .value { color: #ff4757; }
         .stat-card.pending .value { color: #ffa502; }
+        .stat-card.processing .value { color: #00d9ff; }
         .stat-card.info .value { color: #00d9ff; }
         .progress-section { 
             background: rgba(255,255,255,0.05); 
@@ -135,6 +136,7 @@ async def dashboard():
             <div class="stat-card info"><h3>Total Documents</h3><div class="value" id="total-docs">-</div></div>
             <div class="stat-card info"><h3>Total Tables</h3><div class="value" id="total-tables">-</div></div>
             <div class="stat-card success"><h3>Completed Files</h3><div class="value" id="completed">-</div></div>
+            <div class="stat-card processing"><h3>Processing</h3><div class="value" id="processing">-</div></div>
             <div class="stat-card pending"><h3>Pending Files</h3><div class="value" id="pending">-</div></div>
             <div class="stat-card error"><h3>Failed Files</h3><div class="value" id="failed">-</div></div>
             <div class="stat-card info"><h3>Total Files</h3><div class="value" id="total-files">-</div></div>
@@ -168,18 +170,20 @@ async def dashboard():
                 
                 const status = data.processing_status || {};
                 const completed = status.completed || 0;
+                const processing = status.processing || 0;
                 const pending = status.pending || 0;
                 const failed = status.failed || 0;
-                const total = discovered || (completed + pending + failed);
+                const total = discovered || (completed + processing + pending + failed);
                 
                 document.getElementById('completed').textContent = completed;
+                document.getElementById('processing').textContent = processing;
                 document.getElementById('pending').textContent = pending;
                 document.getElementById('failed').textContent = failed;
                 
-                const progress = total > 0 ? (completed / total * 100) : 0;
+                const progress = total > 0 ? ((completed + processing) / total * 100) : 0;
                 document.getElementById('progress-fill').style.width = progress + '%';
                 document.getElementById('progress-text').textContent = 
-                    `${completed} / ${total} files processed (${progress.toFixed(1)}%)`;
+                    `${completed} completed, ${processing} processing / ${total} total (${progress.toFixed(1)}%)`;
                     
             } catch (e) {
                 console.error('Failed to fetch stats:', e);
@@ -219,54 +223,61 @@ async def dashboard():
 @app.get("/api/stats")
 async def get_stats():
     """Get current processing statistics"""
-    stats = {'document_count': 0, 'table_count': 0, 'file_count': 0, 'processing_status': {}}
-    
+    stats = {
+        "document_count": 0,
+        "table_count": 0,
+        "file_count": 0,
+        "processing_status": {},
+    }
+
     conn = get_db_connection()
     if conn:
         try:
             cur = conn.cursor()
-            
+
             # Document count
             cur.execute("SELECT COUNT(*) as count FROM documents;")
             result = cur.fetchone()
-            stats['document_count'] = result['count'] if result else 0
-            
+            stats["document_count"] = result["count"] if result else 0
+
             # Table count
             cur.execute("SELECT COUNT(*) as count FROM tables;")
             result = cur.fetchone()
-            stats['table_count'] = result['count'] if result else 0
-            
+            stats["table_count"] = result["count"] if result else 0
+
             # File count
             cur.execute("SELECT COUNT(*) as count FROM file_metadata;")
             result = cur.fetchone()
-            stats['file_count'] = result['count'] if result else 0
-            
+            stats["file_count"] = result["count"] if result else 0
+
             # Processing status breakdown
             cur.execute("""
                 SELECT processing_status, COUNT(*) as count 
                 FROM file_metadata 
                 GROUP BY processing_status;
             """)
-            stats['processing_status'] = {row['processing_status']: row['count'] for row in cur.fetchall()}
-            
+            stats["processing_status"] = {
+                row["processing_status"]: row["count"] for row in cur.fetchall()
+            }
+
             cur.close()
         except Exception as e:
             logger.error(f"Failed to get stats: {e}")
         finally:
             conn.close()
-    
+
     # Also parse log for discovered files count
     log_file = "batch_ingest.log"
     discovered_count = 0
     if os.path.exists(log_file):
-        with open(log_file, 'r') as f:
+        with open(log_file, "r") as f:
             for line in f:
                 if "Discovered" in line and "PDF files" in line:
-                    match = re.search(r'Discovered (\d+) PDF', line)
+                    match = re.search(r"Discovered (\d+) PDF", line)
                     if match:
                         discovered_count = int(match.group(1))
-    
-    stats['discovered_count'] = discovered_count
+
+    stats["discovered_count"] = discovered_count
     return stats
 
 
@@ -277,8 +288,8 @@ async def get_logs(lines: int = 50):
         log_file = "batch_ingest.log"
         if not os.path.exists(log_file):
             return {"logs": ["No log file found. Start batch ingestion first."]}
-        
-        with open(log_file, 'r') as f:
+
+        with open(log_file, "r") as f:
             all_lines = f.readlines()
             recent_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
             return {"logs": [line.strip() for line in reversed(recent_lines)]}
@@ -296,7 +307,10 @@ async def get_files(status: Optional[str] = None):
         try:
             cur = conn.cursor()
             if status:
-                cur.execute("SELECT * FROM file_metadata WHERE processing_status = %s;", (status,))
+                cur.execute(
+                    "SELECT * FROM file_metadata WHERE processing_status = %s;",
+                    (status,),
+                )
             else:
                 cur.execute("SELECT * FROM file_metadata LIMIT 100;")
             files = [dict(row) for row in cur.fetchall()]
@@ -305,7 +319,7 @@ async def get_files(status: Optional[str] = None):
             logger.error(f"Failed to get files: {e}")
         finally:
             conn.close()
-    
+
     return {"files": files, "count": len(files)}
 
 
@@ -317,10 +331,11 @@ async def health_check():
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
-    parser.add_argument('--port', type=int, default=8080, help='Port to bind to')
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
+    parser.add_argument("--port", type=int, default=8080, help="Port to bind to")
     args = parser.parse_args()
-    
+
     print(f"🚀 Dashboard running at http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port)
