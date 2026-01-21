@@ -539,7 +539,7 @@ class OptimizedVectorDatabase:
 
                     result = cur.fetchone()
                     if result:
-                        table_ids.append(result[0])
+                        table_ids.append(result["id"])
 
                     # Commit every 50 inserts to avoid long transactions
                     if (i + 1) % 50 == 0:

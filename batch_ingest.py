@@ -712,6 +712,12 @@ async def main():
         action="store_true",
         help="Process all files even if already completed",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit number of files to process (0 for no limit)",
+    )
 
     args = parser.parse_args()
 
@@ -730,6 +736,11 @@ async def main():
 
         if not args.force:
             tasks = ingestor.check_existing_files(tasks)
+
+        # Apply limit if specified
+        if args.limit > 0:
+            logger.info(f"⚠️ Limiting processing to first {args.limit} files")
+            tasks = tasks[: args.limit]
 
         if not tasks:
             logger.info("All files already processed. Use --force to reprocess.")
