@@ -1,0 +1,34 @@
+{
+    "Final": {
+        "Financial Reporting": {
+            "Ind AS 115": "A",
+            "Ind AS 116": "A",
+            "Consolidated Financial Statements": "A",
+            "Financial Instruments": "A",
+            "Share Based Payments": "B",
+            "Analysis of Financial Statements": "C"
+        },
+        "Advanced Financial Management": {
+            "Forex": "A",
+            "Derivatives": "A",
+            "Portfolio Management": "A",
+            "Mergers & Acquisitions": "B",
+            "Startup Finance": "C"
+        }
+    },
+    "Intermediate": {
+        "Accounting": {
+            "Accounting Standards": "A",
+            "Company Accounts": "A",
+            "Branch Accounts": "B",
+            "Departmental Accounts": "B",
+            "Incomplete Records": "A"
+        },
+        "Taxation": {
+            "Income Tax - Heads of Income": "A",
+            "GST - Input Tax Credit": "A",
+            "TDS/TCS": "B",
+            "Assessment Procedure": "C"
+        }
+    }
+}

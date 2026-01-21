@@ -6,8 +6,10 @@ import shutil
 import logging
 import time
 import re
+import json
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+
 import concurrent.futures
 from dataclasses import dataclass
 from enum import Enum
@@ -51,21 +53,47 @@ class FileTask:
     processing_time: float = 0.0
 
 
+def process_pdf_worker(file_path: str) -> Dict[str, Any]:
+    """
+    Worker function to process a PDF in a separate process.
+    This ensures isolation for crashes (segfaults) and JVM conflicts.
+    """
+    # Import here to avoid pickling issues and ensure fresh state
+    from pdf_processor import PDFProcessor
+
+    # Initialize processor with 1 worker (no threads inside process)
+    processor = PDFProcessor(max_workers=1)
+    return processor.extract_text_and_tables(file_path)
+
 class BatchIngestor:
     def __init__(
         self, ca_folder_path: str = "ca", max_workers: int = 4, retry_attempts: int = 3
     ):
         """
         Initialize batch ingestor
-
-        Args:
-            ca_folder_path: Path to ca folder containing PDFs
-            max_workers: Number of concurrent workers
-            retry_attempts: Max retry attempts per file
         """
         self.ca_folder_path = Path(ca_folder_path).resolve()
         self.max_workers = max_workers
         self.retry_attempts = retry_attempts
+
+        # Load Chapter Weights
+        weights_path = Path("data/chapter_weights.json")
+        self.chapter_weights = {}
+        if weights_path.exists():
+            try:
+                with open(weights_path, "r") as f:
+                    self.chapter_weights = json.load(f)
+                logger.info("Loaded chapter weights")
+            except Exception as e:
+                logger.warning(f"Failed to load chapter weights: {e}")
+        else:
+            logger.warning("No chapter_weights.json found, using defaults")
+
+        # Initialize Process Pool for robust isolation
+        # max_tasks_per_child=1 ensures memory is cleaned up and JVM is restarted per file
+        self.process_executor = concurrent.futures.ProcessPoolExecutor(
+            max_workers=max_workers, max_tasks_per_child=1
+        )
 
         # Initialize components
         logger.info("=== Initializing VectorDatabase ===")
@@ -396,10 +424,11 @@ class BatchIngestor:
         return await loop.run_in_executor(None, _copy_file)
 
     async def _extract_pdf_content(self, file_path: str) -> Dict[str, Any]:
-        """Extract text and tables from PDF"""
+        """Extract text and tables from PDF using isolated process"""
         loop = asyncio.get_event_loop()
+        # Use the ProcessPoolExecutor to run the worker function
         return await loop.run_in_executor(
-            None, self.pdf_processor.extract_text_and_tables, file_path
+            self.process_executor, process_pdf_worker, file_path
         )
 
     async def _classify_and_generate_embeddings(
@@ -422,6 +451,26 @@ class BatchIngestor:
                 )
                 content_type = self.classifier.classify(content)
 
+                # Enrich content using LLM (Premium Metadata)
+                enrichment = {}
+                if len(content) > 100:  # Only enrich substantial content
+                    try:
+                        # Construct Context with Hierarchy
+                        level = metadata.get("level", "")
+                        paper = metadata.get("paper", "")
+                        chapter = metadata.get("chapter", "")
+                        context_str = f"Level: {level}, Paper: {paper}, Chapter: {chapter}. "
+                        
+                        # Add hint from weights if possible (can be expanded)
+                        if level in self.chapter_weights:
+                            context_str += f"Context from Chapter Weights: {json.dumps(self.chapter_weights[level]) if len(str(self.chapter_weights[level])) < 200 else 'Refer to standard weights'}."
+
+                        enrichment = await loop.run_in_executor(
+                            None, self.classifier.enrich_content, content, context_str
+                        )
+                    except Exception as e:
+                        logger.warning(f"Enrichment failed for chunk: {e}")
+
                 # Get embedding via azure_embeddings inner object
                 embedding = await loop.run_in_executor(
                     None, self.embedding_manager.azure_embeddings.get_embedding, content
@@ -435,6 +484,35 @@ class BatchIngestor:
                         "metadata": chunk.get("metadata", {})
                         if isinstance(chunk, dict)
                         else {},
+                        # Preserve question context from pdf_processor
+                        "question_id": chunk.get("question_id", "")
+                        if isinstance(chunk, dict)
+                        else "",
+                        "subquestion": chunk.get("subquestion", "")
+                        if isinstance(chunk, dict)
+                        else "",
+                        "question_context": chunk.get("question_context", "")
+                        if isinstance(chunk, dict)
+                        else "",
+                        "section_type": chunk.get("section_type", "content")
+                        if isinstance(chunk, dict)
+                        else "content",
+                        # MCQ fields
+                        "is_mcq": chunk.get("is_mcq", False)
+                        if isinstance(chunk, dict)
+                        else False,
+                        "mcq_options": chunk.get("mcq_options", {})
+                        if isinstance(chunk, dict)
+                        else {},
+                        # Enrichment fields
+                        "difficulty": enrichment.get("difficulty"),
+                        "estimated_time": enrichment.get("estimated_time"),
+                        "topics": enrichment.get("topics", []),
+                        "question_type": enrichment.get("question_type"),
+                        # Quiz/ABC fields
+                        "question_text": enrichment.get("question_text"),
+                        "answer_text": enrichment.get("answer_text"),
+                        "importance": enrichment.get("importance"),
                     }
                 )
 
@@ -504,30 +582,58 @@ class BatchIngestor:
                                 "applicable_attempts", ["May_2026"]
                             ),
                             "node_id": metadata.get("node_id"),
+                            # Question context fields for better RAG
+                            "question_id": c.get("question_id", ""),
+                            "subquestion": c.get("subquestion", ""),
+                            "question_context": c.get("question_context", ""),
+                            "section_type": c.get("section_type", "content"),
+                            # MCQ fields
+                            "is_mcq": c.get("is_mcq", False),
+                            "mcq_options": c.get("mcq_options", {}),
+                            # Enrichment fields
+                            "difficulty": c.get("difficulty"),
+                            "estimated_time": c.get("estimated_time"),
+                            "topics": c.get("topics", []),
+                            "question_type": c.get("question_type"),
+                            # Quiz/ABC fields
+                            "question_text": c.get("question_text"),
+                            "answer_text": c.get("answer_text"),
+                            "importance": c.get("importance"),
+                            "references": c.get("references", []),
                         }
                     ]
                 ),
             )
 
-        # Store tables
+        # Store tables with question context
         for i, table in enumerate(processed_tables):
             await loop.run_in_executor(
                 None,
-                self.vector_db.store_table,
-                file_id,
-                file_name,
-                table["data"],
-                table.get("html", ""),
-                table["embedding"],
-                table.get("context_before", ""),
-                table.get("context_after", ""),
-                table.get("page_number", 0),
-                i,
-                metadata["level"],
-                metadata["paper"],
-                metadata.get("module"),
-                metadata.get("chapter"),
-                metadata.get("unit"),
+                lambda t=table, idx=i: self.vector_db.store_tables_batch(
+                    [
+                        {
+                            "file_id": file_id,
+                            "file_name": file_name,
+                            "table_data": t["data"],
+                            "table_html": t.get("html", ""),
+                            "embedding": t["embedding"],
+                            "context_before": t.get("context_before", ""),
+                            "context_after": t.get("context_after", ""),
+                            "page_number": t.get("page_number", 0),
+                            "table_index": idx,
+                            "level": metadata["level"],
+                            "paper": metadata["paper"],
+                            "module": metadata.get("module"),
+                            "chapter": metadata.get("chapter"),
+                            "unit": metadata.get("unit"),
+                            # Question context fields for better RAG
+                            "question_id": t.get("question_id", ""),
+                            "subquestion": t.get("subquestion", ""),
+                            "question_context": t.get("question_context", ""),
+                            "section_type": t.get("section_type", "content"),
+                        }
+                    ]
+                ),
             )
 
     def _print_final_stats(self) -> None:

@@ -13,7 +13,10 @@ from config import (
     AZURE_OPENAI_ENDPOINT,
     AZURE_OPENAI_KEY,
     AZURE_OPENAI_VERSION,
-    AZURE_LLM_DEPLOYMENT  # Use existing deployment
+    AZURE_LLM_DEPLOYMENT,  # Use existing deployment
+    NEW_AZURE_OPENAI_ENDPOINT,
+    NEW_AZURE_OPENAI_KEY,
+    NEW_AZURE_LLM_DEPLOYMENT,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 class ContentType(Enum):
     """Content type classification for CA chunks"""
+
     THEORY = "theory"
     FORMULA = "formula"
     DEFINITION = "definition"
@@ -39,110 +43,113 @@ class ContentClassifier:
     # FORMULA PATTERNS - Mathematical, financial, and accounting formulas
     FORMULA_PATTERNS = [
         # LaTeX patterns
-        r'\\frac\{',           # LaTeX fractions
-        r'\\sum',              # Summation
-        r'\\int',              # Integration
-        r'\\sqrt',             # Square root
-        r'\$\$.+?\$\$',        # Display math
-        r'\$.+?\$',            # Inline math
-        
+        r"\\frac\{",  # LaTeX fractions
+        r"\\sum",  # Summation
+        r"\\int",  # Integration
+        r"\\sqrt",  # Square root
+        r"\$\$.+?\$\$",  # Display math
+        r"\$.+?\$",  # Inline math
         # Mathematical equations
-        r'=\s*[^=]+[+\-*/^×÷]',  # Equations with operators
-        r'\([^)]+\)\s*[×x÷/]\s*\d',  # Bracketed calculations
-        r'\d+\s*[×x÷/+\-]\s*\d+\s*=',  # Simple arithmetic
-        
+        r"=\s*[^=]+[+\-*/^×÷]",  # Equations with operators
+        r"\([^)]+\)\s*[×x÷/]\s*\d",  # Bracketed calculations
+        r"\d+\s*[×x÷/+\-]\s*\d+\s*=",  # Simple arithmetic
         # Financial formulas (CA-specific)
-        r'(?:NPV|IRR|EMI|PV|FV|ROI|ROE|ROA|EPS|P/E|WACC)\s*=',
-        r'(?:Gross Profit|Net Profit|EBITDA|EBIT)\s*=',
-        r'(?:Current Ratio|Quick Ratio|Debt Equity)\s*=',
-        r'(?:Rate of Return|Rate of Interest|Discount Rate)\s*=',
-        r'(?:Depreciation|Amortization)\s*=\s*',
-        r'(?:Taxable Income|Tax Payable|TDS)\s*=',
-        r'(?:Contribution|Margin|BEP|Break.?Even)\s*=',
-        r'(?:Variance|Standard Deviation|Std\.? Dev\.?)\s*=',
-        
+        r"(?:NPV|IRR|EMI|PV|FV|ROI|ROE|ROA|EPS|P/E|WACC)\s*=",
+        r"(?:Gross Profit|Net Profit|EBITDA|EBIT)\s*=",
+        r"(?:Current Ratio|Quick Ratio|Debt Equity)\s*=",
+        r"(?:Rate of Return|Rate of Interest|Discount Rate)\s*=",
+        r"(?:Depreciation|Amortization)\s*=\s*",
+        r"(?:Taxable Income|Tax Payable|TDS)\s*=",
+        r"(?:Contribution|Margin|BEP|Break.?Even)\s*=",
+        r"(?:Variance|Standard Deviation|Std\.? Dev\.?)\s*=",
         # Percentage calculations
-        r'\d+\.?\d*\s*%\s*(?:of|×|x)',
-        r'=\s*\d+\.?\d*\s*%',
-        
+        r"\d+\.?\d*\s*%\s*(?:of|×|x)",
+        r"=\s*\d+\.?\d*\s*%",
         # Ratio expressions
-        r'\d+\s*:\s*\d+',  # Ratios like 3:2
+        r"\d+\s*:\s*\d+",  # Ratios like 3:2
     ]
 
     # DEFINITION PATTERNS - Formal definitions and concepts
     DEFINITION_PATTERNS = [
         # Explicit definition markers
-        r'(?:^|\n)\s*(?:Definition|Meaning|Concept|Term)[:\s]+',
-        r'(?:is defined as|means|refers to|can be defined as)',
-        r'(?:shall mean|would mean|includes|excludes)',
-        
+        r"(?:^|\n)\s*(?:Definition|Meaning|Concept|Term)[:\s]+",
+        r"(?:is defined as|means|refers to|can be defined as)",
+        r"(?:shall mean|would mean|includes|excludes)",
         # CA/Accounting standards references
-        r'As per (?:AS|Ind AS|IAS|IFRS|SA|SQC)\s*\d*',
-        r'(?:According to|Under|In terms of)\s+(?:AS|Ind AS|Section|Clause)',
-        r'Section\s+\d+[A-Z]?\s+(?:of|defines|states)',
-        
+        r"As per (?:AS|Ind AS|IAS|IFRS|SA|SQC)\s*\d*",
+        r"(?:According to|Under|In terms of)\s+(?:AS|Ind AS|Section|Clause)",
+        r"Section\s+\d+[A-Z]?\s+(?:of|defines|states)",
         # Quote-based definitions
         r'(?:^|\n)\s*[""][A-Z][^""]+[""]\s+(?:means|refers|is)',
-        
         # Key term introductions
         r'(?:The term|The concept of|The expression)\s+[""\'"][^""\']+[""\'"]',
-        r'(?:^|\n)\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+–\s+',  # Term dash definition
+        r"(?:^|\n)\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+–\s+",  # Term dash definition
     ]
 
     # EXAMPLE/ILLUSTRATION PATTERNS
     EXAMPLE_PATTERNS = [
         # Explicit markers
-        r'(?:^|\n)\s*(?:Example|Illustration|Case Study|Practical Problem)[:\s\-\d]*',
-        r'(?:^|\n)\s*(?:Problem|Solution|Working|Computation)[:\s\-\d]*',
-        r'(?:^|\n)\s*(?:Q\.|Ques\.|Question)\s*\d+',
-        
+        r"(?:^|\n)\s*(?:Example|Illustration|Case Study|Practical Problem)[:\s\-\d]*",
+        r"(?:^|\n)\s*(?:Problem|Solution|Working|Computation)[:\s\-\d]*",
+        r"(?:^|\n)\s*(?:Q\.|Ques\.|Question)\s*\d+",
         # Contextual markers
-        r'(?:For (?:example|instance)|e\.g\.|viz\.|i\.e\.|Let us consider)',
-        r'(?:Consider the following|Suppose that|Assume that|Given that)',
-        r'(?:Mr\.|Mrs\.|Ms\.|M/s|ABC Ltd|XYZ Ltd|PQR Ltd)',  # Company/person names
-        
+        r"(?:For (?:example|instance)|e\.g\.|viz\.|i\.e\.|Let us consider)",
+        r"(?:Consider the following|Suppose that|Assume that|Given that)",
+        r"(?:Mr\.|Mrs\.|Ms\.|M/s|ABC Ltd|XYZ Ltd|PQR Ltd)",  # Company/person names
         # Numerical examples
-        r'(?:^|\n)\s*₹\s*[\d,]+',  # Rupee amounts at start
-        r'(?:purchased|sold|acquired|invested)\s+.*\s+(?:for|at)\s+₹',
+        r"(?:^|\n)\s*₹\s*[\d,]+",  # Rupee amounts at start
+        r"(?:purchased|sold|acquired|invested)\s+.*\s+(?:for|at)\s+₹",
     ]
 
     # PROCEDURE/STEPS PATTERNS (classify as THEORY with procedure subtype)
     PROCEDURE_PATTERNS = [
-        r'(?:^|\n)\s*(?:Step\s*\d+|Procedure|Process|Method)[:\s\-]',
-        r'(?:^|\n)\s*(?:First|Second|Third|Finally|Lastly)[,:\s]',
-        r'(?:following steps|step.?by.?step|procedure is)',
+        r"(?:^|\n)\s*(?:Step\s*\d+|Procedure|Process|Method)[:\s\-]",
+        r"(?:^|\n)\s*(?:First|Second|Third|Finally|Lastly)[,:\s]",
+        r"(?:following steps|step.?by.?step|procedure is)",
     ]
 
     # THEORY INDICATORS (helps distinguish from unknown)
     THEORY_PATTERNS = [
-        r'(?:^|\n)\s*(?:Introduction|Objective|Scope|Applicability)[:\s]',
-        r'(?:^|\n)\s*(?:Features|Characteristics|Types|Classification)[:\s]',
-        r'(?:^|\n)\s*(?:Advantages|Disadvantages|Merits|Demerits)[:\s]',
-        r'(?:^|\n)\s*(?:Provisions|Requirements|Conditions)[:\s]',
-        r'(?:It is important to|It should be noted|It may be observed)',
-        r'(?:The (?:main|key|important|significant) (?:point|aspect|feature))',
+        r"(?:^|\n)\s*(?:Introduction|Objective|Scope|Applicability)[:\s]",
+        r"(?:^|\n)\s*(?:Features|Characteristics|Types|Classification)[:\s]",
+        r"(?:^|\n)\s*(?:Advantages|Disadvantages|Merits|Demerits)[:\s]",
+        r"(?:^|\n)\s*(?:Provisions|Requirements|Conditions)[:\s]",
+        r"(?:It is important to|It should be noted|It may be observed)",
+        r"(?:The (?:main|key|important|significant) (?:point|aspect|feature))",
     ]
 
     def __init__(self, use_llm_fallback: bool = True):
         """
         Initialize the classifier
-        
+
         Args:
             use_llm_fallback: Whether to use Azure GPT-4o-mini for ambiguous cases
         """
         self.use_llm_fallback = use_llm_fallback
         self._client = None
+        self._enrichment_client = None
 
     @property
     def client(self) -> AzureOpenAI:
-        """Lazy initialization of Azure OpenAI client"""
+        """Lazy initialization of Azure OpenAI client (original)"""
         if self._client is None:
             self._client = AzureOpenAI(
                 azure_endpoint=AZURE_OPENAI_ENDPOINT,
                 api_key=AZURE_OPENAI_KEY,
-                api_version=AZURE_OPENAI_VERSION
+                api_version=AZURE_OPENAI_VERSION,
             )
         return self._client
+
+    @property
+    def enrichment_client(self) -> AzureOpenAI:
+        """Lazy initialization of new Azure OpenAI client for enrichment"""
+        if self._enrichment_client is None:
+            self._enrichment_client = AzureOpenAI(
+                azure_endpoint=NEW_AZURE_OPENAI_ENDPOINT,
+                api_key=NEW_AZURE_OPENAI_KEY,
+                api_version=AZURE_OPENAI_VERSION,
+            )
+        return self._enrichment_client
 
     def _check_formula(self, text: str) -> bool:
         """Check if text contains formula patterns"""
@@ -182,7 +189,7 @@ class ContentClassifier:
     def _classify_with_regex(self, text: str) -> Tuple[Optional[ContentType], float]:
         """
         Smart regex classification - no LLM needed
-        
+
         Returns:
             Tuple of (ContentType, confidence score 0-1)
         """
@@ -209,7 +216,7 @@ class ContentClassifier:
     def _classify_with_llm(self, text: str) -> ContentType:
         """
         Use Azure GPT-4o-mini for classification (cheap fallback)
-        
+
         Returns:
             ContentType classification
         """
@@ -229,15 +236,12 @@ Classify the given text into exactly one of these categories:
 - DEFINITION: Formal definitions of terms or concepts
 - EXAMPLE: Practical examples, illustrations, case studies
 
-Respond with ONLY the category name (THEORY, FORMULA, DEFINITION, or EXAMPLE)."""
+Respond with ONLY the category name (THEORY, FORMULA, DEFINITION, or EXAMPLE).""",
                     },
-                    {
-                        "role": "user",
-                        "content": f"Classify this text:\n\n{truncated}"
-                    }
+                    {"role": "user", "content": f"Classify this text:\n\n{truncated}"},
                 ],
                 max_tokens=10,
-                temperature=0
+                temperature=0,
             )
 
             result = response.choices[0].message.content.strip().upper()
@@ -247,7 +251,7 @@ Respond with ONLY the category name (THEORY, FORMULA, DEFINITION, or EXAMPLE).""
                 "THEORY": ContentType.THEORY,
                 "FORMULA": ContentType.FORMULA,
                 "DEFINITION": ContentType.DEFINITION,
-                "EXAMPLE": ContentType.EXAMPLE
+                "EXAMPLE": ContentType.EXAMPLE,
             }
 
             return mapping.get(result, ContentType.THEORY)
@@ -259,11 +263,11 @@ Respond with ONLY the category name (THEORY, FORMULA, DEFINITION, or EXAMPLE).""
     def classify(self, text: str, is_table: bool = False) -> ContentType:
         """
         Classify content type using hybrid approach
-        
+
         Args:
             text: The text content to classify
             is_table: Whether this content is a table (pre-classified)
-            
+
         Returns:
             ContentType enum value
         """
@@ -278,7 +282,9 @@ Respond with ONLY the category name (THEORY, FORMULA, DEFINITION, or EXAMPLE).""
         content_type, confidence = self._classify_with_regex(text)
 
         if content_type and confidence >= 0.8:
-            logger.debug(f"Regex classified as {content_type.value} (confidence: {confidence})")
+            logger.debug(
+                f"Regex classified as {content_type.value} (confidence: {confidence})"
+            )
             return content_type
 
         # Use LLM fallback for ambiguous cases
@@ -292,11 +298,11 @@ Respond with ONLY the category name (THEORY, FORMULA, DEFINITION, or EXAMPLE).""
     def classify_batch(self, texts: list, is_table_flags: list = None) -> list:
         """
         Classify multiple texts
-        
+
         Args:
             texts: List of text strings to classify
             is_table_flags: Optional list of boolean flags indicating if each text is a table
-            
+
         Returns:
             List of ContentType values
         """
@@ -308,28 +314,84 @@ Respond with ONLY the category name (THEORY, FORMULA, DEFINITION, or EXAMPLE).""
             for text, is_table in zip(texts, is_table_flags)
         ]
 
+    def enrich_content(self, text: str, context: str = "") -> dict:
+        """
+        Enrich content with metadata using LLM (gpt-4o-mini).
+        Extracts: difficulty, estimated_time, topics, question_type.
+
+        Args:
+            text: The content to enrich
+            context: Optional context (e.g. surrounding text)
+
+        Returns:
+            Dict with enrichment fields
+        """
+        if not text or len(text) < 50:  # Skip very short content
+            return {}
+
+        try:
+            # Prepare prompt
+            truncated = text[:2000]  # Limit context
+
+            response = self.enrichment_client.chat.completions.create(
+                model=NEW_AZURE_LLM_DEPLOYMENT,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are an expert CA tutor. Analyze the given study content and extract metadata in JSON format.
+Fields required:
+- "difficulty": "Easy", "Medium", or "Hard"
+- "estimated_time": Minutes to read/understand (integer)
+- "topics": List of key concepts (max 3)
+- "references": List of specific Standards (e.g. 'Ind AS 116'), Sections (e.g. 'Sec 185'), or Case Laws mentioned.
+- "question_type": "Theory", "Numerical", "Case Study", or "Definition"
+- "question_text": Clean question text (if applicable). Remove solution/answer.
+- "answer_text": The solution/explanation (if applicable).
+- "importance": "A" (High - Frequent in exams), "B" (Medium), "C" (Low - Good to know). Based on CA exam trends.
+
+Return ONLY the JSON object.""",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Content: {truncated}\n\nContext: {context}",
+                    },
+                ],
+                max_tokens=1000,
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+
+            import json
+
+            content = response.choices[0].message.content
+            return json.loads(content)
+
+        except Exception as e:
+            logger.warning(f"Enrichment failed: {e}")
+            return {}
+
 
 def generate_node_id(file_path: str) -> str:
     """
     Generate a stable node ID from the file path
-    
+
     Converts: ca/final/fr/module1/chapter3/unit1/file.pdf
     To: final_fr_m1_c3_u1
-    
+
     Args:
         file_path: Relative path to the PDF file
-        
+
     Returns:
         Stable node ID string
     """
     import os
 
     # Normalize path
-    path = file_path.lower().replace('\\', '/')
-    parts = path.split('/')
+    path = file_path.lower().replace("\\", "/")
+    parts = path.split("/")
 
     # Skip 'ca' folder if present
-    if parts and parts[0] == 'ca':
+    if parts and parts[0] == "ca":
         parts = parts[1:]
 
     # Extract components
@@ -342,34 +404,39 @@ def generate_node_id(file_path: str) -> str:
     for part in parts:
         clean_part = part.lower().strip()
 
-        if any(l in clean_part for l in ['foundation', 'intermediate', 'final']):
-            level = 'found' if 'foundation' in clean_part else \
-                    'inter' if 'intermediate' in clean_part else 'final'
+        if any(l in clean_part for l in ["foundation", "intermediate", "final"]):
+            level = (
+                "found"
+                if "foundation" in clean_part
+                else "inter"
+                if "intermediate" in clean_part
+                else "final"
+            )
 
-        elif 'paper' in clean_part:
+        elif "paper" in clean_part:
             # Extract paper number (e.g., "Paper-1" -> "p1")
-            match = re.search(r'paper[^\d]*(\d+[a-z]?)', clean_part)
+            match = re.search(r"paper[^\d]*(\d+[a-z]?)", clean_part)
             if match:
                 paper = f"p{match.group(1)}"
 
-        elif 'module' in clean_part:
-            match = re.search(r'module\s*(\d+)', clean_part)
+        elif "module" in clean_part:
+            match = re.search(r"module\s*(\d+)", clean_part)
             if match:
                 module = f"m{match.group(1)}"
 
-        elif 'chapter' in clean_part:
-            match = re.search(r'chapter\s*(\d+)', clean_part)
+        elif "chapter" in clean_part:
+            match = re.search(r"chapter\s*(\d+)", clean_part)
             if match:
                 chapter = f"c{match.group(1)}"
 
-        elif 'unit' in clean_part:
-            match = re.search(r'unit\s*(\d+)', clean_part)
+        elif "unit" in clean_part:
+            match = re.search(r"unit\s*(\d+)", clean_part)
             if match:
                 unit = f"u{match.group(1)}"
 
     # Build node ID
     components = [c for c in [level, paper, module, chapter, unit] if c]
-    return '_'.join(components) if components else 'unknown'
+    return "_".join(components) if components else "unknown"
 
 
 # Default instance for convenience

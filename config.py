@@ -31,6 +31,12 @@ AZURE_EMBEDDINGS_DEPLOYMENT = os.getenv("AZURE_EMBEDDINGS_DEPLOYMENT", "text-emb
 AZURE_LLM_DEPLOYMENT = os.getenv("AZURE_LLM_DEPLOYMENT", "gpt-4")
 AZURE_OPENAI_MINI_DEPLOYMENT = os.getenv("AZURE_OPENAI_MINI_DEPLOYMENT", "gpt-4o-mini")
 
+# New Azure Deployment for Enrichment
+NEW_AZURE_OPENAI_ENDPOINT = os.getenv("NEW_AZURE_OPENAI_ENDPOINT", "")
+NEW_AZURE_OPENAI_KEY = os.getenv("NEW_AZURE_OPENAI_KEY", "")
+NEW_AZURE_LLM_DEPLOYMENT = os.getenv("NEW_AZURE_LLM_DEPLOYMENT", "gpt-4o-mini")
+NEW_AZURE_OPENAI_MINI_DEPLOYMENT = os.getenv("NEW_AZURE_OPENAI_MINI_DEPLOYMENT", "gpt-4o-mini")
+
 # Database Configuration - Using DATABASE_URL for connection
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/ca_rag_db")
 
