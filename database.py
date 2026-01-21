@@ -250,7 +250,7 @@ class OptimizedVectorDatabase:
                     
                     result = cur.fetchone()
                     if result:
-                        doc_ids.append(result[0])
+                        doc_ids.append(result['id'])  # RealDictCursor returns dict, not tuple
                     
                     # Commit every 100 inserts to avoid long transactions
                     if (i + 1) % 100 == 0:
