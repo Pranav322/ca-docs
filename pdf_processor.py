@@ -59,8 +59,10 @@ class OptimizedPDFProcessor:
                 tasks.append(('text', text_task))
                 
                 # Table extraction tasks (run in parallel)
-                table_task = executor.submit(self._process_with_pdfplumber, pdf_path)
-                tasks.append(('tables_pdfplumber', table_task))
+                # NOTE: pdfplumber disabled due to libpdfium.so segfaults on Linux
+                # Camelot + Tabula provide sufficient table extraction
+                # table_task = executor.submit(self._process_with_pdfplumber, pdf_path)
+                # tasks.append(('tables_pdfplumber', table_task))
                 
                 if CAMELOT_AVAILABLE:
                     camelot_task = executor.submit(self._process_with_camelot, pdf_path)

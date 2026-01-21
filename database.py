@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class OptimizedVectorDatabase:
-    def __init__(self, max_connections: int = 20, batch_size: int = 1000):
+    def __init__(self, max_connections: int = 50, batch_size: int = 1000):
         self.connection_url = DATABASE_URL
         self.pool = None
         self.max_connections = max_connections
@@ -33,7 +33,9 @@ class OptimizedVectorDatabase:
             conn = self.pool.getconn()
             return conn
         except Exception as e:
-            logger.error(f"Database connection failed: {e}")
+            import traceback
+            logger.error(f"Database connection failed: {type(e).__name__}: {e}")
+            logger.error(traceback.format_exc())
             raise
     
     def init_database(self):
