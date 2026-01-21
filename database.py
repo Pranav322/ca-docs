@@ -387,6 +387,7 @@ class OptimizedVectorDatabase:
                                              difficulty, estimated_time, topics, question_type,
                                              question_text, answer_text, importance, doc_references)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id;
                     """,
                         (
                             chunk["file_id"],
