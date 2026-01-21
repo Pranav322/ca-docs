@@ -599,7 +599,7 @@ class BatchIngestor:
                             "question_text": c.get("question_text"),
                             "answer_text": c.get("answer_text"),
                             "importance": c.get("importance"),
-                            "references": c.get("references", []),
+                            "doc_references": c.get("references", []),
                         }
                     ]
                 ),

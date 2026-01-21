@@ -246,7 +246,7 @@ class OptimizedVectorDatabase:
             """)
             cur.execute("""
                 ALTER TABLE documents 
-                ADD COLUMN IF NOT EXISTS references TEXT[];  -- Array of 'Ind AS 116', 'Sec 185', etc.
+                ADD COLUMN IF NOT EXISTS doc_references TEXT[];  -- Array of 'Ind AS 116', 'Sec 185', etc.
             """)
 
             # Create Study Plan Table
@@ -385,7 +385,7 @@ class OptimizedVectorDatabase:
                                              question_id, subquestion, question_context, section_type,
                                              is_mcq, mcq_options,
                                              difficulty, estimated_time, topics, question_type,
-                                             question_text, answer_text, importance, references)
+                                             question_text, answer_text, importance, doc_references)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                         (
@@ -419,7 +419,7 @@ class OptimizedVectorDatabase:
                             chunk.get("question_text"),
                             chunk.get("answer_text"),
                             chunk.get("importance"),
-                            chunk.get("references", []),
+                            chunk.get("doc_references", []),
                         ),
                     )
 
